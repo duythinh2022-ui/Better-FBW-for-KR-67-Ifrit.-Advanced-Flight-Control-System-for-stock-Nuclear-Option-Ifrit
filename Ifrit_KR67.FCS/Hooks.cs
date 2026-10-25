@@ -74,10 +74,13 @@ namespace Ifrit_KR67.FCS
 			{
 				return true;
 			}
-			// 2.0.6 fuel balancing runs for every locally simulated F-22E, FCS engaged or not
+			// 2.0.6 fuel balancing runs for every locally simulated F-22E, FCS engaged or not (0.4.0: if the host allows the FCS)
 			try
 			{
-				FuelBalance.Step(aircraft, Time.fixedDeltaTime);
+				if (MpPolicy.FcsAllowed)
+				{
+					FuelBalance.Step(aircraft, Time.fixedDeltaTime);
+				}
 			}
 			catch (Exception ex)
 			{
@@ -86,6 +89,8 @@ namespace Ifrit_KR67.FCS
 			}
 			if (!Plugin.Enabled)
 			{
+				// (also when the host does not allow the FCS: hand the surfaces back to the stock fly-by-wire)
+				Registry.Disengage(aircraft);
 				return true;
 			}
 			bool flag = (UnityEngine.Object)(object)aircraft.Player == null;
@@ -229,7 +234,26 @@ namespace Ifrit_KR67.FCS
 					reference.pitchRange = s.Span;
 					reference.rollRange = 0f;
 					reference.yawRange = 0f;
-					reference.controlInputs.pitch = Mathf.Clamp(s.cmdOut / s.Span, -1f, 1f);
+					float defl = s.cmdOut;
+					// Ifrit 0.3.6: deceleron deflection + split inside one travel at the job too. The split is capped to what the
+					// deflection leaves (BudgetSplit), but it closes at the servo rate, so a deflection growing while the split
+					// retracts added up for a frame or two (31.7 deg in the 23:01/23:10 logs). The deflection sent here is held
+					// to the travel less the split the job will still have next frame.
+					if (Plugin.DeceleronSplitBudget && c.splits != null)
+					{
+						foreach (SplitEffector seB in c.splits)
+						{
+							if (seB.host == s && seB.cs != null && Acc.JobCreated(seB.cs))
+							{
+								ref ControlSurfaceFields rs = ref Acc.Job(seB.cs);
+								float splitNext = Mathf.Max(0f, rs.splitAmount - rs.servoSpeed * Time.fixedDeltaTime);
+								float lim = Mathf.Max(0f, Mathf.Max(s.max, 0f - s.min) - splitNext);
+								defl = Mathf.Clamp(defl, 0f - lim, lim);
+								break;
+							}
+						}
+					}
+					reference.controlInputs.pitch = Mathf.Clamp(defl / s.Span, -1f, 1f);
 					reference.controlInputs.roll = 0f;
 					reference.controlInputs.yaw = 0f;
 					// Ifrit: the split-flap deceleron on this surface is an allocator effector; the job turns its yaw input

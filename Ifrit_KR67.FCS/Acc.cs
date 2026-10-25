@@ -86,6 +86,111 @@ namespace Ifrit_KR67.FCS
 
 		public static readonly AccessTools.FieldRef<Turbojet, float> TF_staticThrust = AccessTools.FieldRefAccess<Turbojet, float>("maxThrust");
 
+		// Ifrit 0.4.1: the engine's damage state and RPM range (Turbojet.FixedUpdate: target RPM = Lerp(minRPM, minRPM + (maxRPM - minRPM) x (0.5 x condition + 0.5), throttle);
+		// thrustRatio = (rpm - 0.85 minRPM) / (maxRPM - minRPM); the afterburner runs only with rpm / maxRPM > 0.85)
+		public static readonly AccessTools.FieldRef<Turbojet, float> TF_condition = AccessTools.FieldRefAccess<Turbojet, float>("condition");
+
+		public static readonly AccessTools.FieldRef<Turbojet, float> TF_minRPM = AccessTools.FieldRefAccess<Turbojet, float>("minRPM");
+
+		public static readonly AccessTools.FieldRef<Turbojet, float> TF_maxRPM = AccessTools.FieldRefAccess<Turbojet, float>("maxRPM");
+
+		public static readonly AccessTools.FieldRef<Turbojet, float> TF_spoolRate = AccessTools.FieldRefAccess<Turbojet, float>("spoolRate");
+
+		public static readonly AccessTools.FieldRef<Turbojet, Vector2> TF_remap = AccessTools.FieldRefAccess<Turbojet, Vector2>("throttleRemap");
+
+		public static readonly AccessTools.FieldRef<Turbojet, float> TF_rpm = AccessTools.FieldRefAccess<Turbojet, float>("rpm");
+
+		// thrust = max(0, (maxThrust - parasiticThrustLoss) x thrustRatio); in the game only the LiftFan writes it, so on a jet
+		// without one the FCS may use it to hold a healthy engine down to a damaged one's thrust (0.4.1)
+		public static readonly AccessTools.FieldRef<Turbojet, float> TF_parasitic = AccessTools.FieldRefAccess<Turbojet, float>("parasiticThrustLoss");
+
+		private static readonly System.Reflection.FieldInfo fJnAfterburners = AccessTools.Field(typeof(JetNozzle), "afterburners");
+
+		// JetNozzle.Afterburner is a private nested class: its fields are resolved from the array's element type
+		private static readonly System.Type tAfterburner = (fJnAfterburners != null && fJnAfterburners.FieldType.IsArray) ? fJnAfterburners.FieldType.GetElementType() : null;
+
+		private static readonly System.Reflection.FieldInfo fAbThrust = (tAfterburner != null) ? AccessTools.Field(tAfterburner, "thrust") : null;
+
+		private static readonly System.Reflection.FieldInfo fAbStart = (tAfterburner != null) ? AccessTools.Field(tAfterburner, "throttleStart") : null;
+
+		private static readonly System.Reflection.FieldInfo fAbEnd = (tAfterburner != null) ? AccessTools.Field(tAfterburner, "throttleEnd") : null;
+
+		// the nozzle's afterburner thrust at full throttle (sum of its afterburners), 0 without one
+		public static float JN_abMax(JetNozzle n)
+		{
+			float sum = 0f;
+			if (n == null || fJnAfterburners == null || fAbThrust == null || !(fJnAfterburners.GetValue(n) is System.Array arr))
+			{
+				return 0f;
+			}
+			for (int i = 0; i < arr.Length; i++)
+			{
+				object ab = arr.GetValue(i);
+				if (ab != null)
+				{
+					sum += (float)fAbThrust.GetValue(ab);
+				}
+			}
+			return sum;
+		}
+
+		// the throttle input at which the nozzle's afterburner starts (the lowest of its afterburners); 1 without one
+		public static float JN_abStart(JetNozzle n)
+		{
+			float st = 1f;
+			if (n == null || fJnAfterburners == null || fAbStart == null || !(fJnAfterburners.GetValue(n) is System.Array arr))
+			{
+				return 1f;
+			}
+			for (int i = 0; i < arr.Length; i++)
+			{
+				object ab = arr.GetValue(i);
+				if (ab != null)
+				{
+					st = Mathf.Min(st, (float)fAbStart.GetValue(ab));
+				}
+			}
+			return st;
+		}
+		// the throttle input at which the nozzle's afterburner is fully in (the lowest of its afterburners); 1 without one
+		public static float JN_abEnd(JetNozzle n)
+		{
+			float en = 1f;
+			if (n == null || fJnAfterburners == null || fAbEnd == null || !(fJnAfterburners.GetValue(n) is System.Array arr))
+			{
+				return 1f;
+			}
+			for (int i = 0; i < arr.Length; i++)
+			{
+				object ab = arr.GetValue(i);
+				if (ab != null)
+				{
+					en = Mathf.Min(en, (float)fAbEnd.GetValue(ab));
+				}
+			}
+			return en;
+		}
+		private static readonly System.Reflection.FieldInfo fAbSmooth = (tAfterburner != null) ? AccessTools.Field(tAfterburner, "smoothing") : null;
+
+		// scale the nozzle's afterburner light-up / fade speed (Afterburner.smoothing: amount = Lerp(amount, target, smoothing x dt))
+		public static void JN_scaleAbSmoothing(JetNozzle n, float k)
+		{
+			if (n == null || fJnAfterburners == null || fAbSmooth == null || !(fJnAfterburners.GetValue(n) is System.Array arr))
+			{
+				return;
+			}
+			for (int i = 0; i < arr.Length; i++)
+			{
+				object ab = arr.GetValue(i);
+				if (ab != null)
+				{
+					fAbSmooth.SetValue(ab, (float)fAbSmooth.GetValue(ab) * k);
+				}
+			}
+		}
+
+
+
 		public static readonly AccessTools.FieldRef<HighLiftDevice, AeroPart> HL_part = AccessTools.FieldRefAccess<HighLiftDevice, AeroPart>("aeroPart");
 
 		public static readonly AccessTools.FieldRef<HighLiftDevice, float> HL_speedDep = AccessTools.FieldRefAccess<HighLiftDevice, float>("speedDeployed");

@@ -24,6 +24,9 @@ namespace Ifrit_KR67.FCS
 
 			public Vector3 aD;
 
+			// Ifrit 0.3.6: this part is the deceleron's own hinge (folded into the deceleron deflection, see decHl)
+			public bool decel;
+
 			public void Animate(float x)
 			{
 				if (!(t == null))
@@ -132,6 +135,13 @@ namespace Ifrit_KR67.FCS
 		// Ifrit 0.3.0: TE-down droop the deceleron (inner) and aileron (outer) pairs are held at, deg
 		public float innerDroop;
 
+		// Ifrit 0.3.6 (DeceleronHldFold): the HLD's rotation of the deceleron hinge (flap_hinge_L2/R2, 20 deg TE-down
+		// deployed), taken off the HLD and flown as deceleron deflection instead: decHlAngle = its full travel, decHl = the
+		// droop it stands for now (deg TE-down)
+		public float decHlAngle;
+
+		public float decHl;
+
 		public float outerDroop;
 
 		// TE-down travel (deg) a surface can droop to before its section reaches stallAoA - 5 - headroom (local AoA), from
@@ -189,6 +199,32 @@ namespace Ifrit_KR67.FCS
 				}
 				hlds.Add(hld);
 				ownedIds.Add(item.GetInstanceID());
+			}
+			// Ifrit 0.3.6: the Ifrit's HLD also rotates each deceleron's inner hinge (flap_hinge_L2/R2, the deceleron's
+			// liftNormal and the parent of both split halves) 20 deg TE-down. That stacked on the FCS deflection and the split:
+			// one split half reached deflection + 20 + split (50 deg on the runway with the brake out, 80 worst case) and the
+			// deceleron flew at deflection + 20 aerodynamically. Those parts are held retracted and the 20 deg x deploy is
+			// flown as deceleron droop, inside the +-30 travel and the 0.3.2 split budget.
+			if (surfaces != null)
+			{
+				foreach (Hld hD in hlds)
+				{
+					foreach (MovingPart mp in hD.parts)
+					{
+						if (mp.t == null || !mp.rotate)
+						{
+							continue;
+						}
+						foreach (SurfaceEffector sD in surfaces)
+						{
+							if (sD.kind == SurfaceKind.Flaperon && sD.cs != null && mp.t.IsChildOf(sD.cs.transform))
+							{
+								mp.decel = true;
+								decHlAngle = Mathf.Max(decHlAngle, Mathf.Abs(Wrap(mp.aD.x - mp.aR.x)));
+							}
+						}
+					}
+				}
 			}
 			if (!(ResponderType != null) || !(fRotator != null))
 			{
@@ -350,7 +386,7 @@ namespace Ifrit_KR67.FCS
 				}
 				foreach (MovingPart part in hld.parts)
 				{
-					part.Animate(hld.pos);
+					part.Animate((part.decel && Plugin.DeceleronHldFold) ? 0f : hld.pos);
 				}
 				hlPos = hld.pos;
 			}
@@ -391,6 +427,25 @@ namespace Ifrit_KR67.FCS
 			ailBias = Mathf.MoveTowards(ailBias, num20, ((num20 > ailBias) ? 15f : 40f) * dt);
 			relief = (ground ? 0f : (9.6f * Mathf.Clamp01((nz - 3f) / 6f) * (1f - Mathf.Clamp01((alpha - 16f) / 8f))));
 			innerDroop = (drives.Count == 0 && Plugin.IfritFlaperons && !ground) ? flapBias : 0f;
+			// Ifrit 0.3.6 (DeceleronHldFold): the HLD's deceleron hinge share, from the low-speed schedule (num2; not the
+			// high-AoA slat schedule, faded from 20 to 30 deg AoA like the droop), always on the ground. The airbrake takes
+			// priority: with the splits out it retracts, so the brake keeps its full split inside the +-30 budget. The
+			// decelerons droop to the larger of this and the flaperon schedule (not the sum).
+			if (Plugin.DeceleronHldFold && decHlAngle > 0f)
+			{
+				float hlShare = 0f;
+				foreach (Hld hS in hlds)
+				{
+					hlShare = Mathf.Max(hlShare, ground ? hS.pos : Mathf.Min(hS.pos, num2 * num6));
+				}
+				float decT = (c.splitBrakeMode ? 0f : (decHlAngle * hlShare));
+				decHl = Mathf.MoveTowards(decHl, decT, decHlAngle * dt);
+				innerDroop = Mathf.Max(innerDroop, decHl);
+			}
+			else
+			{
+				decHl = 0f;
+			}
 			outerDroop = (drives.Count == 0 && Plugin.IfritFlaperons && !ground) ? (ailBias - relief) : 0f;
 			float num21 = 70f * Plugin.ActuatorScale * dt;
 			foreach (Drive drife5 in drives)

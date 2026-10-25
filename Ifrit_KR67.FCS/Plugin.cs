@@ -46,6 +46,10 @@ namespace Ifrit_KR67.FCS
 
 		private static ConfigEntry<PerformanceProfile> cProfile;
 
+		private static ConfigEntry<bool> cHostAllowFcs;
+
+		private static ConfigEntry<bool> cHostLock;
+
 
 		private static ConfigEntry<bool> cTelemetry;
 
@@ -120,6 +124,31 @@ namespace Ifrit_KR67.FCS
 
 		private static ConfigEntry<float> cSlipGainHi;
 
+		private static ConfigEntry<bool> cDecHldFold;
+
+		private static ConfigEntry<float> cSlipHoldTas0;
+
+		private static ConfigEntry<float> cSlipLimTas0;
+
+		private static ConfigEntry<float> cSlipLimTasSpan;
+
+		private static ConfigEntry<float> cSlipHoldTasSpan;
+
+		private static ConfigEntry<float> cSlipPredT;
+
+		private static ConfigEntry<float> cSlipPredRollGate;
+
+		private static ConfigEntry<bool> cSplitYawTier;
+
+		private static ConfigEntry<float> cStabYawRelax;
+
+
+		private static ConfigEntry<float> cSlipPredW;
+
+		private static ConfigEntry<float> cRevS0;
+
+		private static ConfigEntry<float> cRevS1;
+
 		private static ConfigEntry<float> cSlipGainA0;
 
 		private static ConfigEntry<float> cFullStickQ;
@@ -148,6 +177,31 @@ namespace Ifrit_KR67.FCS
 		public static float FullStickPitchRate => (cFullStickQ != null) ? Mathf.Clamp(cFullStickQ.Value, 0f, 90f) : 60f;
 
 		public static float SlipGainAoAStart => (cSlipGainA0 != null) ? Mathf.Clamp(cSlipGainA0.Value, 0f, 60f) : 5f;
+
+		public static float RevFlowSenseStart => (cRevS0 != null) ? Mathf.Clamp(cRevS0.Value, 90f, 178f) : 120f;
+
+		public static float RevFlowSenseEnd => (cRevS1 != null) ? Mathf.Clamp(cRevS1.Value, 91f, 180f) : 150f;
+
+		public static float SlipLimTasMin => (cSlipLimTas0 != null) ? Mathf.Clamp(cSlipLimTas0.Value, 0f, 100f) : 25f;
+
+		public static float SlipLimTasSpan => (cSlipLimTasSpan != null) ? Mathf.Clamp(cSlipLimTasSpan.Value, 1f, 100f) : 50f;
+
+		public static float SlipHoldTasMin => (cSlipHoldTas0 != null) ? Mathf.Clamp(cSlipHoldTas0.Value, 0f, 60f) : 15f;
+
+		public static float SlipHoldTasSpan => (cSlipHoldTasSpan != null) ? Mathf.Clamp(cSlipHoldTasSpan.Value, 1f, 60f) : 20f;
+
+		public static bool DeceleronHldFold => cDecHldFold == null || cDecHldFold.Value;
+
+		public static float SlipPredictTime => (cSlipPredT != null) ? Mathf.Clamp(cSlipPredT.Value, 0f, 0.8f) : 0.3f;
+
+		public static bool SplitYawTier => cSplitYawTier == null || cSplitYawTier.Value;
+
+
+		public static float StabYawRelax => (cStabYawRelax != null) ? Mathf.Clamp01(cStabYawRelax.Value) : 1f;
+
+		public static float SlipPredictRollGate => (cSlipPredRollGate != null) ? Mathf.Clamp(cSlipPredRollGate.Value, 0f, 1f) : 0f;
+
+		public static float SlipPredictWashout => (cSlipPredW != null) ? Mathf.Clamp(cSlipPredW.Value, 0f, 10f) : 1.5f;
 
 		public static float SlipGainHighAoA => (cSlipGainHi != null) ? Mathf.Max(0f, cSlipGainHi.Value) : 4f;
 
@@ -334,6 +388,18 @@ namespace Ifrit_KR67.FCS
 		private static ConfigEntry<float> cTvcNeutral;
 
 		private static ConfigEntry<bool> cStabPark;
+
+		private static ConfigEntry<float> cSettledMargin;
+
+		private static ConfigEntry<float> cSettledOn;
+
+		private static ConfigEntry<float> cSettledOff;
+
+		private static ConfigEntry<float> cSettledWalk;
+
+		private static ConfigEntry<float> cSettledSlope;
+
+		private static ConfigEntry<float> cSettledYawUse;
 
 
 		private static ConfigEntry<bool> cRollFightRel;
@@ -535,7 +601,7 @@ namespace Ifrit_KR67.FCS
 
 
 
-		public static bool Enabled => cEnabled.Value;
+		public static bool Enabled => cEnabled.Value && MpPolicy.FcsAllowed;
 
 		public static bool TelemetryEnabled => cTelemetry.Value;
 
@@ -727,6 +793,18 @@ namespace Ifrit_KR67.FCS
 
 		public static bool StabParkEscape => cStabPark == null || cStabPark.Value;
 
+		public static float SettledStallMargin => (cSettledMargin == null) ? 6f : Mathf.Clamp(cSettledMargin.Value, 0f, 20f);
+
+		public static float SettledRateOn => (cSettledOn == null) ? 10f : Mathf.Clamp(cSettledOn.Value, 1f, 60f);
+
+		public static float SettledRateOff => (cSettledOff == null) ? 20f : Mathf.Max(SettledRateOn + 1f, cSettledOff.Value);
+
+		public static float SettledWalkRate => (cSettledWalk == null) ? 30f : Mathf.Clamp(cSettledWalk.Value, 1f, 100f);
+
+		public static float SettledSlopeFrac => (cSettledSlope == null) ? 0.15f : Mathf.Clamp(cSettledSlope.Value, 0f, 1f);
+
+		public static float SettledYawUse => (cSettledYawUse == null) ? 0.4f : Mathf.Clamp(cSettledYawUse.Value, 0f, 5f);
+
 		public static float TvcNeutralHold => cTvcNeutral == null ? 1000f : Mathf.Max(0f, cTvcNeutral.Value);
 
 		public static float StabCLScale => false ? 1f : Mathf.Clamp((1f), 0.5f, 2f);
@@ -900,6 +978,12 @@ namespace Ifrit_KR67.FCS
 
 		private static ConfigEntry<float> cEngOutCap;
 
+		private static ConfigEntry<float> cEngDmgCap;
+
+		private static ConfigEntry<float> cThrResp;
+
+		private static ConfigEntry<bool> cEngAbGate;
+
 		private static ConfigEntry<int> cStickRev;
 
 		private static ConfigEntry<float> cStick24;
@@ -925,6 +1009,10 @@ namespace Ifrit_KR67.FCS
 		private static ConfigEntry<float> cAuthCapFloor;
 
 		private static ConfigEntry<float> cHybridIndi;
+
+		private static ConfigEntry<float> cHybridHiLead;
+
+		private static ConfigEntry<bool> cAllocNozzleNewton;
 
 
 		public static float DecelLookahead => Mathf.Max(0f, cDecelLook.Value);
@@ -965,6 +1053,12 @@ namespace Ifrit_KR67.FCS
 		// 0.333 +-0.25, 36 within 0.5 +-0.2, and 36 at least 0.1 of stick past 24 (36 is pushed out if they come closer).
 		public static float EngineOutAoACap => Mathf.Clamp(cEngOutCap.Value, 10f, 65f);
 
+		public static float EngineDamagedAoACap => (cEngDmgCap != null) ? Mathf.Clamp(cEngDmgCap.Value, 10f, 65f) : 40f;
+
+		public static float ThrottleResponseScale => (cThrResp != null) ? Mathf.Clamp(cThrResp.Value, 0.25f, 4f) : 1f;
+
+		public static bool EngineAbAoAGate => cEngAbGate == null || cEngAbGate.Value;
+
 		public static float StickAoA24 => Mathf.Clamp(cStick24.Value, 0.0833f, 0.7f);
 
 		public static float StickAoA36 => Mathf.Clamp(Mathf.Max(Mathf.Clamp(cStick36.Value, 0.3f, 0.8f), StickAoA24 + 0.1f), 0.3f, 0.95f);
@@ -988,6 +1082,10 @@ namespace Ifrit_KR67.FCS
 		public static float AuthCapFloor => Mathf.Clamp(cAuthCapFloor.Value, 5f, 65f);
 
 		public static float HybridIndiGain => Mathf.Clamp(cHybridIndi.Value, 0f, 1.5f);
+
+		public static float HybridIndiHighAoALead => (cHybridHiLead != null) ? Mathf.Clamp(cHybridHiLead.Value, 0f, 0.3f) : 0.15f;
+
+		public static bool AllocNozzleNewton => cAllocNozzleNewton == null || cAllocNozzleNewton.Value;
 
 
 		private static ConfigEntry<float> cYawRefKmh;
@@ -1022,28 +1120,54 @@ namespace Ifrit_KR67.FCS
 
 		public static float YawMidRampKmh => Mathf.Max(1f, cYawMidRamp.Value);
 
-		public static bool StockPerformance => cProfile != null && cProfile.Value == PerformanceProfile.Stock;
+		// Ifrit 0.4.0 multiplayer: the Local* values are this machine's settings; the plain ones are what applies here, which
+		// as a client is the host's policy (MpPolicy): the host's variant when it locks it, stock otherwise.
+		public static bool HostAllowFcs => cHostAllowFcs == null || cHostAllowFcs.Value;
 
-		public static float ThrustScale => StockPerformance ? 1f : cThrust.Value;
+		public static bool HostLockVariant => cHostLock != null && cHostLock.Value;
 
-		public static float FlareCountScale => StockPerformance ? cFlareScaleStock.Value : cFlareScaleBuffed.Value;
+		public static bool LocalStockPerformance => cProfile != null && cProfile.Value == PerformanceProfile.Stock;
 
-		public static float EWCapacityScale => StockPerformance ? cEwCapStock.Value : cEwCapBuffed.Value;
+		public static float LocalThrustScale => LocalStockPerformance ? 1f : cThrust.Value;
 
-		public static float EWRechargeScale => StockPerformance ? cEwRateStock.Value : cEwRateBuffed.Value;
+		public static float LocalFlareCountScale => LocalStockPerformance ? cFlareScaleStock.Value : cFlareScaleBuffed.Value;
 
-		public static float GunAmmoScale => StockPerformance ? cGunAmmoStock.Value : cGunAmmoBuffed.Value;
+		public static float LocalEWCapacityScale => LocalStockPerformance ? cEwCapStock.Value : cEwCapBuffed.Value;
 
-		public static float FuelUseScale => StockPerformance ? 1f : cFuelUse.Value;
+		public static float LocalEWRechargeScale => LocalStockPerformance ? cEwRateStock.Value : cEwRateBuffed.Value;
 
-		public static float DragScale => StockPerformance ? 1f : cDrag.Value;
+		public static float LocalGunAmmoScale => LocalStockPerformance ? cGunAmmoStock.Value : cGunAmmoBuffed.Value;
+
+		public static float LocalFuelUseScale => LocalStockPerformance ? 1f : cFuelUse.Value;
+
+		public static float LocalDragScale => LocalStockPerformance ? 1f : cDrag.Value;
+
+		public static float LocalDragReliefAoAHigh => LocalStockPerformance ? 0f : Mathf.Clamp(cDrAoA.Value, 0f, 0.5f);
+
+		public static float LocalDragReliefTransonic => LocalStockPerformance ? 0f : Mathf.Clamp(cDrTrans.Value, 0f, 0.5f);
+
+		public static bool StockPerformance => MpPolicy.StockForced || (MpPolicy.VariantLocked ? MpPolicy.Host.stock : LocalStockPerformance);
+
+		public static float ThrustScale => MpPolicy.VariantLocked ? MpPolicy.Host.thrust : (MpPolicy.StockForced ? 1f : LocalThrustScale);
+
+		public static float FlareCountScale => MpPolicy.VariantLocked ? MpPolicy.Host.flare : (MpPolicy.StockForced ? 1f : LocalFlareCountScale);
+
+		public static float EWCapacityScale => MpPolicy.VariantLocked ? MpPolicy.Host.ewCap : (MpPolicy.StockForced ? 1f : LocalEWCapacityScale);
+
+		public static float EWRechargeScale => MpPolicy.VariantLocked ? MpPolicy.Host.ewRate : (MpPolicy.StockForced ? 1f : LocalEWRechargeScale);
+
+		public static float GunAmmoScale => MpPolicy.VariantLocked ? MpPolicy.Host.gun : (MpPolicy.StockForced ? 1f : LocalGunAmmoScale);
+
+		public static float FuelUseScale => MpPolicy.VariantLocked ? MpPolicy.Host.fuel : (MpPolicy.StockForced ? 1f : LocalFuelUseScale);
+
+		public static float DragScale => MpPolicy.VariantLocked ? MpPolicy.Host.drag : (MpPolicy.StockForced ? 1f : LocalDragScale);
 
 		// 2.2.3 (rev 2): AoA drag relief as a curve over each part's local AoA. Up to DragReliefFadeStart it is DragReliefAoA
 		// (LowAoADragRelief, both profiles); across the fade band it goes over to DragReliefAoAHigh: none in Stock (post-stall
 		// drag is Aryx's), the old flat AoADragRelief in Buffed.
-		public static float DragReliefAoA => Mathf.Clamp(cStockDrAoA.Value, 0f, 0.5f);
+		public static float DragReliefAoA => MpPolicy.FcsAllowed ? Mathf.Clamp(cStockDrAoA.Value, 0f, 0.5f) : 0f;
 
-		public static float DragReliefAoAHigh => StockPerformance ? 0f : Mathf.Clamp(cDrAoA.Value, 0f, 0.5f);
+		public static float DragReliefAoAHigh => MpPolicy.VariantLocked ? MpPolicy.Host.drAoAHigh : (MpPolicy.StockForced ? 0f : LocalDragReliefAoAHigh);
 
 		public static float DragReliefFadeStart => Mathf.Clamp(cStockDrFade0.Value, 5f, 60f);
 
@@ -1071,7 +1195,7 @@ namespace Ifrit_KR67.FCS
 
 		private static ConfigEntry<float> cDragBump, cDragBump0, cDragBump1, cDragBump2;
 
-		public static float DragReliefTransonic => StockPerformance ? 0f : Mathf.Clamp(cDrTrans.Value, 0f, 0.5f);
+		public static float DragReliefTransonic => MpPolicy.VariantLocked ? MpPolicy.Host.drTrans : (MpPolicy.StockForced ? 0f : LocalDragReliefTransonic);
 
 
 		public static float KpG => cKpG.Value;
@@ -1182,13 +1306,31 @@ namespace Ifrit_KR67.FCS
 			cProfile = cfg.Bind("1. General", "PerformanceProfile", PerformanceProfile.Stock, "Stock (default) = the game's KR-67 thrust, parasitic drag and fuel burn, with 35 % of the AoA-dependent drag removed up to 25 deg AoA, faded out by 30 (post-stall drag is stock), see StockAoADragRelief. Buffed (Ifrit 0.2.2) = thrust x1.08 (dry and afterburner), parasitic drag x0.95, the same low-AoA drag relief going over to 0.25 post-stall, transonic drag relief 0.1, fuel burn x0.75. Countermeasures and gun ammo come from the matching Countermeasures section below. The flight control is the same in both. Switch before spawning: thrust, drag, countermeasures and ammo are set when a jet spawns and stay until it respawns; fuel burn follows the setting live.");
 			cThrIndepBrake = cfg.Bind("1. General", "ThrottleIndependentAirbrake", defaultValue: true, "Ifrit 0.2.1: what opens the split decelerons (the Ifrit's airbrake, in the air and on the ground). true = the brake key / axis only; idle throttle is just idle. false = the stock rule as well: throttle at zero opens them too. Only while the FCS flies the jet.");
 			cEnabled = cfg.Bind("1. General", "Enabled", defaultValue: true, "Replace the stock fly-by-wire with the Ifrit FCS (player aircraft only).");
+			cHostAllowFcs = cfg.Bind("8. Multiplayer (host)", "HostAllowFcs", defaultValue: true, "Ifrit 0.4.0: read on the HOST (or dedicated server). true = players who run this plugin may fly their Ifrits with its control laws on this server. false = every client flies the stock fly-by-wire. A client whose host does not run this plugin always flies stock (fly-by-wire, thrust, drag, fuel burn, countermeasures and ammo), whatever its own settings. Ifrit 0.4.1: the host's own jet is bound by this switch too (false = the host flies stock as well). While this or HostLockVariant is on, the server is flagged as modded (server browser / NOMM 'Modded' tag).");
+			// Ifrit 0.4.7: HostLockVariant on by default. A player file written by an older build still says "# Default value:
+			// false" above the key; if it also still holds false (the old default), it is moved to true once. The file is then
+			// saved, which rewrites the default line, so a later false set by the player stays.
+			bool hostLockOldFile = HostLockOldDefault(cfg.ConfigFilePath);
+			cHostLock = cfg.Bind("8. Multiplayer (host)", "HostLockVariant", defaultValue: true, "Ifrit 0.4.0: read on the HOST. Ifrit 0.4.7: on by default. true = every client gets the host's variant: the host's PerformanceProfile with its thrust, drag and fuel-burn scaling and the host's countermeasure and gun-ammo capacities from the matching Countermeasures section. false = every client flies the Stock variant with stock countermeasures and ammo (their own profile and capacity settings are ignored while connected). Ifrit 0.4.1: with the lock off the host flies the Stock variant on its own server as well; the host's PerformanceProfile is used in multiplayer only through this lock. Changes are sent to the clients at once and apply at the next spawn.");
+			if (hostLockOldFile)
+			{
+				if (!cHostLock.Value)
+				{
+					cHostLock.Value = true;
+				}
+				cfg.Save();
+				Log.LogInfo("Ifrit 0.4.7 defaults: HostLockVariant on.");
+			}
 			cRateOnly = cfg.Bind("1. General", "PitchRateCommandOnly", defaultValue: false, "2.0.6: true = the pitch stick is a pitch-rate command in every mode (gear up or down, on the runway, Stability Assist on or off), like the gear-down law. With Stability Assist on, the AoA and G limits and AoA protection still apply; with it off (MPO) the MPO limits apply as before. false = AoA/G command with the gear up (default). Takes effect at once.");
 			cPitchLaw = cfg.Bind("1. General", "PitchCommandLaw", PitchCommandLaw.GAndPitchRate, "2.1.0: the gear-up pitch law (Stability Assist on). GAndPitchRate (default) = the stick commands pitch rate where full G is out of reach (low IAS) and G where it is in reach, blended as before; no AoA command - the AoA limits, the low-thrust / asymmetric-load caps and AoA protection still apply as limits. GAoAAndPitchRate = the 1.9-2.0 law: AoA command at low IAS (stick curve in section 5), G command at high IAS, pitch-rate command past the hand-over AoA. AoAThenRateHold (2.1.8) = as GAoAAndPitchRate, but once the stick is steady and the AoA has settled on its command, the pitch rate the jet has then is held instead of the AoA (the AoA drifts with speed); moving the stick goes back to AoA command. PitchRateCommandOnly = true overrides all of them. Takes effect at once.");
 			cFuelBal = dev.Bind("6. Fuel", "FuelBalancing", defaultValue: true, "2.0.6: move fuel between the healthy tanks to hold the centre of mass where the clean jet has it (centreline; stock fore/aft position without stores), against store asymmetry, a part shot off or a leaking tank. Only between attached, non-leaking, non-burning tanks; mass is conserved. All Ifrits simulated on this machine.");
-			cEngOutCap = dev.Bind("Asymmetric load", "EngineOutAoACap", 30f, "2.0.13: with an engine out the AoA limit is this, both signs, steady (plus whatever an aerodynamic asymmetry from damage needs on top). The dead engine's thrust yaw is left to the VMC protection (throttle, last resort) instead of the AoA cap, which made the limit follow speed and throttle (12 <-> 65 deg within seconds in 2.0.12).");
+			cEngOutCap = dev.Bind("Asymmetric load", "EngineOutAoACap", 22f, "Ifrit 0.4.0: 22 (was 30; the Ifrit's engines sit 1.19 m off the centreline, one at AB is 24 deg/s^2 of yaw against 10-24 from the tails at 200-300 km/h and 20 deg AoA; bench one-engine pulls from 300 km/h: 18-25 hold without the throttle cut, 30 bleeds to 50-85 m/s and departs). 2.0.13: with an engine out the AoA limit is this, both signs, steady (plus whatever an aerodynamic asymmetry from damage needs on top). The dead engine's thrust yaw is left to the VMC protection (throttle, last resort) instead of the AoA cap, which made the limit follow speed and throttle (12 <-> 65 deg within seconds in 2.0.12).");
+			cEngDmgCap = dev.Bind("Asymmetric load", "EngineDamagedAoACap", 40f, "Ifrit 0.4.2: 40 (first 0.4.1 / 2.4.1 cut: 30, the engine-out cap; a running engine's split is a third to a half of a dead one's, and below the speed where the fins could not hold it the thrust match now takes over on prediction, so the cap only says where the full split is traded for matched thrust). Ifrit 0.4.1: with one engine running weak (damaged, not destroyed: under 85 % of the other's thrust, released above 92 %, 1 s filter) the AoA limit is this fixed value, both signs, instead of the dynamic thrust cap (which fell to 12 deg within 5 s in the 22 Oct 22:08 log and then followed IAS). The dead-engine case keeps EngineOutAoACap. The game caps a damaged engine at 50-100 % of its RPM range by its condition (no afterburner below condition ~0.6), so the weak engine makes 35-75 % of the good one's thrust at AB. Bench, full pulls from 300-400 km/h with the left engine at condition 0 / 0.5: 26-30 hold with 5-8 deg peak sideslip, 36 saturates the yaw once the speed is gone (throttle cut a third of the time, one departure), 45 departs.");
+			cThrResp = dev.Bind("5. Airframe", "ThrottleResponseScale", 1f, "Ifrit 0.4.1: throttle response (Ifrit 0.4.5: back to the game's own, 1) for every variant (Stock included): the engines' spool rate (RPM per second toward the throttle's target) and the afterburner's light-up / fade speed are multiplied by this at the airframe setup. 1 = the mod's own values.");
+			cEngAbGate = dev.Bind("Asymmetric load", "EngineAbAoAGate", true, "Ifrit 0.4.1: thrust-match limiter. With one engine down on thrust (predicted from the engines' damage state: an engine's reachable RPM is minRPM + (maxRPM - minRPM) x (0.5 x condition + 0.5), the dry thrust follows the RPM and the afterburner needs 85 % of maxRPM, i.e. condition above 0.55) and the AoA above EngineDamagedAoACap, the throttle input is held where the two engines still make the same thrust, so there is no thrust split and no AoA cap for it: you keep the full AoA, and the thrust comes back once you bring the AoA down to the cap yourself (on above cap + 2, off under cap + 0.5). Below the cap the throttle is free; the thrust split then brings the fixed EngineDamagedAoACap. With an engine OUT there is nothing to match: above EngineOutAoACap the throttle is held at military power (the afterburner's start). The VMC throttle protection (measured sideslip run-away) stays as the last resort. false = 0.4.0 (dynamic cap from the thrust split, nose pushed down).");
 			cFuelTrim = dev.Bind("6. Fuel", "FuelTrim", defaultValue: true, "2.0.12: when the yaw or roll authority runs short (an engine out, a fin or wing section shot off), the balancing moves the CG sideways with fuel instead of holding it on the centreline: toward the live engine to shorten its thrust lever arm, or against an aerodynamic asymmetry. Only once the yaw or roll usage passes 0.75, only as far as evens out the roll and yaw usage (a sideways CG costs roll: ~15 deg/s^2 per g per 10 cm), at most 30 cm; back to the centreline once both are under 0.5 for 2 s. false = centreline always (2.0.6-2.0.11).");
-			cFuelTrimRate = dev.Bind("6. Fuel", "FuelTrimRate", 120f, "2.0.12: fuel moved per second (kg/s, in total) while the fuel trim works (normal balancing: FuelTransferRate).");
-			cFuelRate = dev.Bind("6. Fuel", "FuelTransferRate", 40f, "2.0.6: total fuel the balancing moves per second (kg/s).");
+			cFuelTrimRate = dev.Bind("6. Fuel", "FuelTrimRate", 240f, "2.0.12: fuel moved per second (kg/s, in total) while the fuel trim works (normal balancing: FuelTransferRate). Ifrit 0.4.1: 240 (was 120).");
+			cFuelRate = dev.Bind("6. Fuel", "FuelTransferRate", 80f, "2.0.6: total fuel the balancing moves per second (kg/s). Ifrit 0.4.1: 80 (was 40).");
 			cFuelTolLat = dev.Bind("6. Fuel", "FuelBalanceLateralTolerance", 0.01f, "2.0.6: lateral CG error (m) the balancing weighs as one unit; it leaves the fuel alone inside half of it.");
 			cFuelTolLong = dev.Bind("6. Fuel", "FuelBalanceLongitudinalTolerance", 0.03f, "2.0.6: fore/aft CG error (m) the balancing weighs as one unit; it leaves the fuel alone inside half of it.");
 			cFuelAttached = dev.Bind("6. Fuel", "FuelFromAttachedTanksOnly", defaultValue: true, "2.0.6: engines draw fuel only from tanks still attached, and the fuel gauge / fuel checks count only those (against the full original capacity); a tank on a part that has been shot off is not refuelled. false = stock (a shot-off tank's fuel keeps feeding the engines and showing on the gauge).");
@@ -1211,7 +1353,7 @@ namespace Ifrit_KR67.FCS
 			cFlapCamber = dev.Bind("5. Airframe", "FlapCamberCoupling", 0.46f, "Ifrit 0.2.0: a flap (flaperon / deceleron) deflection also cambers wing1 ahead of it: the wing section's lift normal turns by K x the deflection about the hinge. Thin-airfoil flap theory for the flap's 0.23 chord (area 3 of 13 m^2): effectiveness 0.59 of the whole section, the flap plate already carrying 3/13, so the host takes (0.59 x 13 - 3) / 10 = 0.46. 0 = off (stock: each surface is its own plate).");
 			cAilCamber = dev.Bind("5. Airframe", "AileronCamberCoupling", 0.57f, "Ifrit 0.2.0: the same for the ailerons on wing2 (0.39 chord, 4.5 of 11.5 m^2: effectiveness 0.74, host share (0.74 x 11.5 - 4.5) / 7 = 0.57). 0 = off.");
 			cLatMargin = cfg.Bind("1. General", "HighAoALateralBrakeMargin", 0.86f, new ConfigDescription("Ifrit 0.3.1: high-AoA lateral braking margin. Above HighAoALateralMarginFull (30 deg AoA, dev cfg) the roll- and yaw-rate limits are multiplied by this, blended in smoothly from HighAoALateralMarginStart (25). 0.86 = 14 % less allowed stop time: 14 % less roll and yaw rate for the same authority, the rotation stops sooner. 1 = 0.3.0. Takes effect at once.", new AcceptableValueRange<float>(0.5f, 1.5f)));
-			cMpoSep = cfg.Bind("1. General", "MpoRollMode", MpoRollMode.VelocityVectorRoll, "Ifrit 0.3.1: the lateral law with Stability Assist off (MPO). VelocityVectorRoll (default) = as with it on: the stick rolls about the velocity vector, the sideslip is held and the pedals work as they do with it on. SeparateRollYaw = the 0.2.0-0.3.0 MPO law: the stick commands body roll rate and the pedals body yaw rate, with no coordination or sideslip hold (the jet rolls about the velocity vector only when roll and yaw are applied together). Takes effect at once.");
+			cMpoSep = cfg.Bind("1. General", "MpoRollMode", MpoRollMode.SeparateRollYaw, "Ifrit 0.3.1 (default SeparateRollYaw since 0.3.7): the lateral law with Stability Assist off (MPO). VelocityVectorRoll = as with it on: the stick rolls about the velocity vector, the sideslip is held and the pedals work as they do with it on. SeparateRollYaw (default) = the 0.2.0-0.3.0 MPO law: the stick commands body roll rate and the pedals body yaw rate, with no coordination or sideslip hold (the jet rolls about the velocity vector only when roll and yaw are applied together). Takes effect at once.");
 			cMpoWash = dev.Bind("3. Lateral-directional", "MpoSideslipWashout", 0.5f, "Ifrit 0.2.0, separate axes: with the pedals centred and below the coupling AoA, the yaw axis lets sideslip wash out at this rate (deg/s of yaw rate per deg of sideslip), like the airframe's own weathervane. Sideslip is kept inside +-PedalSideslip there. 0 = the yaw rate is held exactly (sideslip stays where the roll left it).");
 			cIfritRev = dev.Bind("2. Envelope", "IfritConfigRevision", 0, "Internal: the Ifrit config revision this file was last updated to. Leave it alone.");
 			cIfritSplit = dev.Bind("3. Lateral-directional", "SplitFlapYaw", defaultValue: true, "Ifrit: the split-flap decelerons are allocator effectors (drag yaw; the game splits a flap from its job's yaw input). The stock zero-throttle airbrake split is suppressed while the FCS flies. false = the flaps never split while the FCS is engaged. Applied when the jet spawns.");
@@ -1222,6 +1364,18 @@ namespace Ifrit_KR67.FCS
 			cTvcRollNeutral = dev.Bind("4. Gains", "TvcRollNeutralHold", false, "Ifrit 0.3.0, default OFF: on the bench any weight here makes the released-stick pitch hold sluggish (q -0.3 deg/s bleeding off over ~7 s in level flight at 400 km/h, the stabs held still), an interaction with the roll-fight cost. TvcNeutralHold for the differential (roll) nozzles. With the lateral stick and pedals centred, the roll on its command and the sideslip under 2 deg, the nozzles go back to symmetric and the wing surfaces hold the roll trim; any roll input, roll error or sideslip frees them at once. false = 0.2.2.");
 			cTvcRollNeutralW = dev.Bind("4. Gains", "TvcRollNeutralWeight", 30f, "Ifrit 0.3.0: cost weight of TvcRollNeutralHold.");
 			cSlipGainHi = dev.Bind("3. Lateral-directional", "SlipGainHighAoA", 4f, "Ifrit 0.3.0 (SlipTvcAssist): the sideslip gain (KBeta) ramps to this from 25 to 45 deg AoA, where the correction is mostly body roll from the nozzles. Bench, 65 deg corkscrew, 1 s full-pedal kick: back under 3 deg in 4.3-4.7 s at 1.3, 0.5-0.8 s at 4. Below 25 deg KBeta applies as before.");
+			cSlipLimTas0 = dev.Bind("3. Lateral-directional", "RollSlackMinTAS", 25f, "Ifrit 0.3.9: below this true airspeed (m/s) the roll is not held back for sideslip or yaw coordination (sideslip guard / governor, yaw-anchored roll limit, roll-acceleration coordination cap); they come back in over RollSlackTASSpan (smoothstep) and are off past 120 deg |AoA|. Higher = more roll slack at low speed, more sideslip.");
+			cSlipLimTasSpan = dev.Bind("3. Lateral-directional", "RollSlackTASSpan", 50f, "Ifrit 0.3.9: m/s over which the roll limiters come back in above RollSlackMinTAS (default: full from 75 m/s TAS, 270 km/h). Bench, full stick from near zero airspeed accelerating to 250 km/h: 25/50 holds 21-44 deg/s where 20/30 sat at 11 deg/s; corkscrew from 150 km/h and slow rolls unchanged.");
+			cSlipHoldTas0 = dev.Bind("3. Lateral-directional", "SlipHoldMinTAS", 15f, "Ifrit 0.3.7: the sideslip hold is off below this true airspeed (m/s) and fades in over SlipHoldTASSpan; it also fades out from 100 to 120 deg |AoA| (flying backwards). Pedals keep commanding yaw there. In tail slides and near zero airspeed the hold asked for yaw it had no authority for: the jet swayed left/right and the roll stick was scaled to nothing. 0 = 0.3.6 at speed (reversed-flow fade still applies).");
+			cSlipHoldTasSpan = dev.Bind("3. Lateral-directional", "SlipHoldTASSpan", 20f, "Ifrit 0.3.7: m/s over which the sideslip hold fades in above SlipHoldMinTAS (default: full from 35 m/s TAS).");
+			cDecHldFold = dev.Bind("5. Airframe", "DeceleronHldFold", true, "Ifrit 0.3.6: the stock high-lift device also rotates each deceleron's inner hinge 20 deg TE-down (the hinge carrying the deceleron's lift and both split halves), on top of the FCS deflection and the split: a split half reached 50 deg on the runway with the airbrake out (80 worst case). With this on, that hinge stays put and the decelerons fly the same 20 deg x deploy as droop instead, so everything stays inside the +-30 deg deceleron travel and the split budget. The airbrake has priority over that droop (it retracts while the splits are out). false = 0.3.5.");
+			cSlipPredT = dev.Bind("3. Lateral-directional", "SlipPredictTime", 0.3f, "Ifrit 0.3.5: sideslip predictor window (s), the inner roll/yaw rate loops' lag in game (~0.3 s in the 20 Oct logs). The sideslip correction works on the sideslip minus the yaw (stability-axis) rate it has already commanded over this window, which has not reached the sideslip yet. Fixes the 0.7 Hz sideslip / roll oscillation at the high-AoA sideslip gain (20 Oct 22:37 and 23:10 logs). 0 = off (0.3.2). Replaces 0.3.3's SlipRateLead.");
+			cSlipPredRollGate = dev.Bind("3. Lateral-directional", "SlipPredictRollGate", 0f, "Ifrit 0.4.0: roll-stick fraction over which the sideslip predictor fades OUT (0.3.5-0.3.9: 0.2, i.e. the predictor was off whenever roll stick was in). 0 = the predictor runs with roll stick in too. 22 Oct 00:30 log, 65 deg AoA corkscrew at 55 m/s with full roll stick held: without the predictor the high-AoA sideslip loop (gain 4) rang against the ~0.34 s inner-loop lag, sideslip +-12 deg and body roll +-50 deg/s on a 1.6 s cycle, every roll surface and the nozzles bang-bang on their stops. A delay-loop model with that lag and 60-100 deg/s^2 of roll authority reproduces the +-10-12 deg cycle without the predictor and settles 12 -> -1.5 -> 0.5 deg in 1.6 s with it.");
+			cSplitYawTier = dev.Bind("3. Lateral-directional", "SplitYawTier", true, "Ifrit 0.4.0: least drag first with an engine out or a damaged yaw axis. The canted tails carry the yaw as long as they can; the inner/outer flaperon crossing comes next (the allocator finds it), the split decelerons open only for the yaw still out of reach (a gate on measured yaw saturation that leaks shut once the yaw is met, the split then having priority over its deceleron's deflection for their shared travel), the VMC throttle limit last. Bench, yaw per kN of added drag at 250 km/h and 20 deg AoA: tails +-10 deg 4.8 deg/s^2, crossing 1.1-1.5, one split at 30 deg 0.4 (17.7 kN of drag), the throttle cut 0.17, false = 0.3.9 (tails and splits one tier, the split free: with the right engine alone at 140 m/s the left split sat at 15-24 deg while the tails held +-2 deg; at the 30 deg cap the flaperons crossed with the splits shut and the engine cut to 30-40 %). Both engines running: no change.");
+			cStabYawRelax = dev.Bind("3. Lateral-directional", "StabYawRelax", 1f, "Ifrit 0.4.0 (SplitYawTier): with an engine out or a damaged yaw axis, how far (0-1) the roll-fight cost is relaxed for the canted tails, so their differential may buy yaw with the wing taking the roll back. 0 = the 1.8.41 fight cost in full (the allocator then prefers sideslip or the splits to a tail difference).");
+			cSlipPredW = dev.Bind("3. Lateral-directional", "SlipPredictWashout", 1.5f, "Ifrit 0.3.5: washout (s) on the predictor's command history, so a held correction (e.g. a yaw trim against a load) leaves no extra steady sideslip. 0 = no washout.");
+			cRevS0 = dev.Bind("3. Lateral-directional", "ReversedFlowSenseStart", 120f, "Ifrit 0.3.4 (ReversedFlowRollSense): |AoA| (deg) where the roll stick sense starts to turn over for reversed flow. It blends smoothly to fully flipped at ReversedFlowSenseEnd, passing through zero. 0.3.2 flipped at once at 100 deg (released at 80), next to 90 deg, where the velocity-vector roll is nearly all body yaw, so the flip reversed the rotation mid-manoeuvre.");
+			cRevS1 = dev.Bind("3. Lateral-directional", "ReversedFlowSenseEnd", 150f, "Ifrit 0.3.4: |AoA| (deg) where the roll stick sense is fully flipped for reversed flow (see ReversedFlowSenseStart).");
 			cSlipGainA0 = dev.Bind("3. Lateral-directional", "SlipGainAoAStart", 5f, "Ifrit 0.3.1: AoA (deg) where the SlipGainHighAoA ramp starts (0.3.0: 25); it reaches SlipGainHighAoA 20 deg higher. Pedals centred only. Bench, corkscrew entry at 475 km/h: from 25 the sideslip built at 15-20 deg AoA and the rolling-pull governor held the AoA there (the 20 deg hitch).");
 			cFullStickQ = dev.Bind("2. Envelope", "FullStickPitchRate", 60f, "Ifrit 0.3.1: pitch-rate limit (deg/s) at full aft stick; the limit rises from MaxPitchRate (48) over the last 20 % of aft stick, so up to 0.8 stick and the push side map as before. MPO unchanged. 0 or <= MaxPitchRate = off.");
 			cSplitBrakeHold = dev.Bind("7. Airbrake", "SplitBrakeHoldCost", 0.5f, "Ifrit 0.3.0: 0.5 (0.2.2: 0.05). With the airbrake out, the allocator cost of bringing both splits in together (the brake symmetric part). With the 30 deg split and 100 deg/s servos, 0.05 let the allocator trade split for pitch and stall there (bench, 700 km/h at 3 km: splits held at 27, pitch rate drifting to -0.6 deg/s, no retraction on release). Higher keeps the full brake through pulls; one-sided retraction for yaw is free, as on the stock Ifrit.");
@@ -1335,7 +1489,13 @@ namespace Ifrit_KR67.FCS
 			cLowYawFall = dev.Bind("3. Lateral-directional", "LowIasYawBoostFalloff", 20f, "Above LowIasYawBoostFullIAS the extra margin decays exponentially with this IAS scale (m/s): 10 = ~50 % of it left at +7 m/s, ~10 % at +23 m/s, gone by 120 m/s.");
 			cTvcMove = dev.Bind("4. Gains", "TvcMoveCost", 2E-05f, "Allocator cost of moving the TVC nozzles. 2e-5 = nozzles take pitch changes first; ~0.02 = stabs do the quick pitch changes and the nozzles slowly take over the sustained (trim) share. Post-stall the nozzles are always fast.");
 			cTvcNeutral = dev.Bind("4. Gains", "TvcNeutralHold", 1000f, "2.2.14: while the pitch rate is held steady (no change of pitch-rate command, no pitch error, no roll in progress) the nozzles are drawn back to neutral over ~1 s and the stabs carry the steady pitch moment; the nozzles still take every change. Cost weight: 1000 (default); 0 = off (2.2.13). Takes effect at once.");
-			cStabPark = dev.Bind("4. Gains", "StabParkEscape", true, "2.2.15: with the lateral stick and pedals centred and AoA under 30 deg, a stabilator past its stall is brought back to the attached side. Fixes surfaces staying locked against each other after a high-AoA release (seen with DisableTVC). false = 2.2.14. Takes effect at once.");
+			cStabPark = dev.Bind("4. Gains", "StabParkEscape", true, "0.4.3 (the F-22E's 2.3.0/2.3.1 settled stall window): with the lateral stick and pedals centred and the lateral rates settled (under SettledRateOn deg/s, off again above SettledRateOff or with lateral input), the stabilators and rudders may not rest past the smaller of (lift peak - SettledStallMargin) and the foil's lift-slope knee (SettledSlopeFrac) of local AoA, at any AoA where such a range exists. This jet's stabilator foil has no stall before 45 deg (its lift keeps rising from 20 to 45 deg at a fifth of the linear slope, the drag four times), so a stab parked out there had next to no gradient for the allocator and made its maximum lift: 23 Oct 00:51 log, left stab on its stop for 10 s after a push through zero AoA at 58 m/s, the nozzle and the crossed wing against it. 0.4.2 and earlier only acted below 30 deg AoA and allowed the peak itself. false = off. Takes effect at once.");
+			cSettledMargin = dev.Bind("4. Gains", "SettledStallMargin", 6f, "0.4.3: how far below the lift peak (deg of local AoA) the settled stall window keeps the stabilators and rudders (see StabParkEscape); the foil's slope knee applies where it is lower. Larger = further onto the attached slope, less trim deflection available from them. Takes effect at once.");
+			cSettledSlope = dev.Bind("4. Gains", "SettledSlopeFrac", 0.15f, "0.4.3: the settled stall window's limit is also where the foil's lift slope has fallen to this fraction of its steepest (the knee of a plateau foil: 26 deg on the stabilator foil at 0.15, where the slope is 0.66 /rad against 4.4 at zero; 0.25 = 17 deg, 0.1 = 31 deg). 0 = the peak - SettledStallMargin only. Takes effect at once.");
+			cSettledOn = dev.Bind("4. Gains", "SettledRateOn", 10f, "0.4.3: the settled stall window (StabParkEscape) comes on when the body roll and yaw rates are both under this (deg/s). Takes effect at once.");
+			cSettledYawUse = dev.Bind("4. Gains", "SettledYawUse", 0.4f, "0.4.3: the settled stall window is held off while the thrust yaw (an engine out or down on thrust) uses more than this fraction of the fins' yaw authority at the present AoA (|asymAy| / asymCy, filtered 0.5 s, back on under this - 0.1): this jet has no rudders, and with an engine out a stabilator run out past its lift knee is its drag rudder (bench, engine-out pull at 250 km/h: windowed, the yaw saturated and the VMC cut the throttle). The 00:51 log's parked set had 0.29; the engine-out trims run 0.5-1.3. Takes effect at once.");
+			cSettledOff = dev.Bind("4. Gains", "SettledRateOff", 20f, "0.4.3: the settled stall window goes off again above this body roll / yaw rate (deg/s), or with lateral input. Takes effect at once.");
+			cSettledWalk = dev.Bind("4. Gains", "SettledWalkRate", 30f, "0.4.3: deg/s at which the settled window walks a surface resting past it back in (the window's edge moves, the allocator re-solves around each step). Takes effect at once.");
 			cRollFightRel = dev.Bind("4. Gains", "RollFightReleased", true, "2.2.16: the roll-fight cost (RollFightCost) also acts while the lateral stick is centred, not only with the pedals in. With the stick released, a crossed set of surfaces - one stab split against the flaperons, ailerons and rudders, all near their stops, their roll cancelling - could hold for 10-15 s (19 Oct 18:05 / 18:32 logs, TVC off). false = 2.2.15. Takes effect at once.");
 			cGndBrakeSplit = dev.Bind("7. Airbrake", "AirbrakeSplitInFlight", defaultValue: true, "In the AIR, the brake control deploys the airframe's split surfaces (the stock speedbrake mechanism). On the ground they stay stowed and the airbrake is the rollout surface configuration alone. The stock rule deployed them whenever the throttle was at idle, airborne as well as on the ground; the FCS drives them now, so idle throttle deploys nothing. false = split surfaces never deploy.");
 			cRotMinSpeed = dev.Bind("Ground", "RotationMinSpeed", 45f, "The take-off/landing rotation law (closed-loop pitch with the mains on the ground) only arms above this TAS (m/s). It used to arm at 15 m/s, an ordinary taxi speed, where it flew closed-loop pitch against the ground constraint and threw the surfaces about. It disarms 8 m/s below this.");
@@ -1400,7 +1560,7 @@ namespace Ifrit_KR67.FCS
 			cNoTvcThrCapPos = dev.Bind("0.1 Debug - Airframe test", "NoTvcThrustAoACapPositive", 45f, "2.2.2: with DisableTVC, the positive AoA cap (deg) once the thrust is up: NoTvcAoACapPositive (36) up to T/W 0.8, this value from T/W 1.0 (afterburner), linear between. Bench: with afterburner the stabs alone hold 45 deg at 160-750 km/h, rolls and reversals included (sideslip 6 deg or less); at part or idle throttle, rolling as the speed bleeds through ~200-250 km/h, 45 departed to 48-62 deg in 5 of 20 cases where 36 held. Takes effect at once.");
 			cNoTvcThrCapNeg = dev.Bind("0.1 Debug - Airframe test", "NoTvcThrustAoACapNegative", 45f, "2.2.2: with DisableTVC, the negative AoA cap magnitude (deg) at every thrust (NoTvcAoACapNegative still applies at low thrust with the nozzles working). Bench: -45 held at 200-450 km/h, idle to afterburner, with a roll, sideslip 5.4 deg or less. Takes effect at once.");
 			cAirframeRev = dev.Bind("5. Airframe", "AirframeRevision", 0, "Internal: the airframe-default revision this file was last updated to (3 = 2.0.3's flaperon 1.2 / LERX 1.2 / stab 1.2, 5 = 2.0.11, 6 = 2.0.12, 7-10 = the F-22E 2.2.23-2.2.29 defaults, ported in Ifrit 0.3.0). Leave it alone.");
-			cFuelUse = dev.Bind("5. Airframe", "FuelConsumptionScale", 0.75f, "Fuel burn multiplier for every engine at every throttle setting, afterburner included (0.75 = 25 % less fuel used). All Ifrits.");
+			cFuelUse = dev.Bind("5. Airframe", "FuelConsumptionScale", 0.65f, "Fuel burn multiplier for every engine at every throttle setting, afterburner included (0.65 = 35 % less fuel used; 0.4.0: 0.75). All Ifrits.");
 			cThrust = dev.Bind("5. Airframe", "ThrustScale", 1.08f, "Engine thrust multiplier (dry staticThrust and afterburner thrust alike, so max-AB total scales the same). Fuel flow per power setting is unchanged.");
 			cDrag = dev.Bind("5. Airframe", "ParasiticDragScale", 0.95f, "Multiplier on every part's parasitic drag area (1 = stock). Ifrit 0.2.2: 0.95 (0.2.0-0.2.1: 0.885). Buffed PerformanceProfile only.");
 			cDrAoA = dev.Bind("5. Airframe", "AoADragRelief", 0.25f, "2.2.3: Buffed profile only, the AoA drag relief above the LowAoADragRelief fade band (post-stall); below it LowAoADragRelief applies. 1.8.38-2.2.2: fraction of the drag that comes from AoA (each part's airfoil drag above that airfoil's minimum) removed at every AoA. A pure scaling of the AoA-dependent drag, so the drag-vs-AoA curve keeps the game's shape with no bump or dip anywhere (a band limited to 5-27 deg would need hand-over zones that make the drag slope dip or hump). 0.25 = drag -20 % averaged over 5-27 deg AoA from this relief alone (about -11 % at 5, -18 % at 10, -22 % at 20, -23 % at 27; -4 % at 2, 0 at 0), on top of TransonicDragRelief; nothing changes at the minimum-drag AoA. Given back per part with the game's own drag model, as a force along each part's airflow. 0 = off. Ignored in the Stock PerformanceProfile.");
@@ -1424,7 +1584,7 @@ namespace Ifrit_KR67.FCS
 			cAsymFF = dev.Bind("Asymmetric load", "AsymFeedForward", 0f, "DEFAULT 0 (off) since 1.8.17. Hands the CHANGE in the modelled asymmetric moment straight to the allocator, washed out over AsymFeedForwardWashout seconds. Inside the INDI loop an added moment is not a one-off kick: the loop measures the acceleration it causes and settles with a steady roll-rate error of about FF/(I x KRoll) for as long as the term lasts, and while the load keeps changing (pulling, levelling off) it lasts the whole time. With a wing shot off it gave a 20-35 deg/s roll drift in pulls and level-offs and helped depart the jet. The loop already measures the asymmetric moment. 1 = pre-1.8.17.");
 			cAsymFFTau = dev.Bind("Asymmetric load", "AsymFeedForwardWashout", 1f, "Time constant (s) over which the feed-forward above hands the load back to the control loop.");
 			cAsymFFBeta = dev.Bind("Asymmetric load", "AsymFeedForwardMaxSideslip", 6f, "AsymFeedForward fades out over the 12 deg of sideslip above this and is off beyond it: the asymmetric moment it is built from is modelled at zero sideslip, so at large sideslip (falling leaf) it is not a measurement of anything.");
-			cRevRoll = dev.Bind("3. Lateral-directional", "ReversedFlowRollSense", defaultValue: true, "Flying backwards (past 100 deg AoA, released below 80): the velocity-vector roll maps to body roll through cos(AoA), which flips sign there, so the stick would roll the jet the other way from the pilot's seat. This flips the roll command with it. Pitch and pedal are unaffected - the control loop already handles reversed flow on the surfaces themselves.");
+			cRevRoll = dev.Bind("3. Lateral-directional", "ReversedFlowRollSense", defaultValue: true, "Flying backwards: the velocity-vector roll maps to body roll through cos(AoA), which flips sign past 90 deg, so the stick would roll the jet the other way from the pilot's seat. This flips the roll command with it, blended smoothly from ReversedFlowSenseStart to ReversedFlowSenseEnd (0.3.4; 0.3.2 flipped at once at 100 deg AoA, released at 80). Pitch and pedal are unaffected - the control loop already handles reversed flow on the surfaces themselves.");
 			cAsymFFAoA = dev.Bind("Asymmetric load", "AsymFeedForwardMaxAoA", 40f, "AsymFeedForward fades out over the 15 deg of AoA above this and is off beyond it. Post-stall the lateral authority it would spend is what the manoeuvre needs.");
 			cAsymRollTau = dev.Bind("Asymmetric load", "AsymRollTau", 0.5f, "The roll reserve also has to cover the roll rate the law allows at this speed, reached in this many seconds. At high IAS that is what sets the reserve (250 deg/s in 0.5 s = 500 deg/s^2), not AsymRollReserveAccel. 0 = off (fixed reserve only).");
 			cAsymRelaxBoost = dev.Bind("Asymmetric load", "AsymCapRelaxBoost", 4f, "The cap relaxes faster the further the demand is below the limit: rate = AsymCapRelaxRate x (1 + this x margin). With the load gone the cap comes back at (1 + this) x the base rate. 0 = fixed rate.");
@@ -1463,6 +1623,8 @@ namespace Ifrit_KR67.FCS
 			cAuthCapFloor = dev.Bind("2. Envelope", "LowThrustCapFloor", 20f, "1.9.0: the low-thrust AoA cap never goes below this (deg).");
 			cLowThrustTW = dev.Bind("2. Envelope", "LowThrustFixedAoATW", 0.3f, "2.0.5: below this thrust-to-weight the nozzles are treated as not covering pitch and the AoA limit is fixed at NoTvcAoACapPositive / Negative (+-36 by default; 2.0.8 and before: +36 only, released 0.03 above). The swept LowThrustAoACap still applies under it.");
 			cHybridIndi = dev.Bind("4. Gains", "HybridIndi", 1f, "1.9.0: pitch-loop lag compensation. The incremental (INDI) pitch loop estimates the airframe's own moment from filtered sensors; at high dynamic pressure that moment moves fast with AoA and pitch rate and the filter lag made the pitch rate overshoot (bench, 2 g command at 1300 km/h: 2.8 g peak then 1.8 g, a slow G oscillation). The lag is now predicted from the airframe model (moment slope with AoA and pitch rate x the filter lag). 0 = off (1.8.45).");
+			cHybridHiLead = dev.Bind("4. Gains", "HybridIndiHighAoALead", 0.15f, "0.4.9 (from F-22E 2.4.7/2.4.8): disturbance-rate lead, seconds. Above 25-40 deg AoA with the pitch stick released, the pitch loop takes the airframe's own pitch acceleration (what the effectors are not doing) forward by its rate x this, so a steady fall in it as the AoA unwinds after a corkscrew release is met when it arrives instead of ~0.1 s late. Pitch damping is left out. Fades out with T/W 0.4 -> 0.2 (the horizon is the nozzles' response). 0 = off (0.4.8).");
+			cAllocNozzleNewton = dev.Bind("4. Gains", "AllocNozzleNewton", true, "0.4.9 (from F-22E 2.4.7/2.4.8): with the pitch stick released and T/W at least 0.25, the allocator's last pass also tries a local Newton step for the nozzles, not only their grid points (every 4 deg). Without it the nozzles could sit between two grid points with a pitch miss while the joint steps were rejected (stabs stalled on their stops, large yaw miss): the post-corkscrew nose dip. false = 0.4.8.");
 			cYawRefKmh = dev.Bind("3. Lateral-directional", "YawBrakeRefIAS", 270f, "1.9.2: IAS (km/h) of the reference manoeuvre for the high-AoA yaw braking floor (HighAoABrakeFloor): full pedal + full lateral stick at max AoA. The yaw-rate limit may not exceed what the yaw authority brakes in YawStopFactor x the low-IAS yaw boost at this IAS (1.8.45: 280).");
 			cYawMargStart = dev.Bind("3. Lateral-directional", "YawStopTimeStartIAS", 210f, "1.9.3: below this IAS (km/h) the allowed yaw stop time grows smoothly (smoothstep) to YawStopTimeLowIAS x at YawStopTimeFullIAS; flat above and below.");
 			cYawMargFull = dev.Bind("3. Lateral-directional", "YawStopTimeFullIAS", 150f, "1.9.3: IAS (km/h) at and below which the full YawStopTimeLowIAS applies.");
@@ -1541,13 +1703,56 @@ namespace Ifrit_KR67.FCS
 					dev.Save();
 				}
 			}
+			// Ifrit 0.3.7: MPO lateral law default VelocityVectorRoll -> SeparateRollYaw; a file still holding the old default
+			// is moved once (a SeparateRollYaw / later choice is never touched)
+			if (cIfritRev.Value < 6)
+			{
+				if (cIfritRev.Value >= 1)
+				{
+					if (cMpoSep.Value == MpoRollMode.VelocityVectorRoll)
+					{
+						cMpoSep.Value = MpoRollMode.SeparateRollYaw;
+						cfg.Save();
+					}
+					cIfritRev.Value = 6;
+					dev.Save();
+				}
+			}
+			// Ifrit 0.4.0: the engine-out AoA cap 30 -> 22 (bench, one engine at AB: at 30 the pull bleeds to 50-85 m/s where the
+			// tails, splits and crossing are all spent and the live engine gets cut; 22 holds without the throttle cut from
+			// 300 km/h). A file still holding 30 is moved once.
+			if (cIfritRev.Value < 7)
+			{
+				if (cIfritRev.Value >= 1)
+				{
+					if (Mathf.Abs(cEngOutCap.Value - 30f) < 0.01f)
+					{
+						cEngOutCap.Value = 22f;
+					}
+					cIfritRev.Value = 7;
+					dev.Save();
+				}
+			}
+			// Ifrit 0.4.1: the buffed variant's fuel burn 0.75 -> 0.65 (35 % less). A file still holding 0.75 is moved once.
+			if (cIfritRev.Value < 8)
+			{
+				if (cIfritRev.Value >= 1)
+				{
+					if (Mathf.Abs(cFuelUse.Value - 0.75f) < 0.001f)
+					{
+						cFuelUse.Value = 0.65f;
+					}
+					cIfritRev.Value = 8;
+					dev.Save();
+				}
+			}
 			if (cIfritRev.Value < 1)
 			{
 				if (cAirframeRev.Value < 3)
 				{
 					cAirframeRev.Value = 3;
 				}
-				cIfritRev.Value = 5;
+				cIfritRev.Value = 8;
 				dev.Save();
 			}
 			// 2.0.12: the high-AoA mid-IAS yaw band is 280-380 km/h at 0.75 (25 % less yaw braking margin); a file still on
@@ -1617,10 +1822,88 @@ namespace Ifrit_KR67.FCS
 					dev.Save();
 				}
 			}
+			// Ifrit 0.4.1: fuel moved twice as fast, balancing 40 -> 80 kg/s and trim 120 -> 240; files still on the old values are moved once
+			if (cAirframeRev.Value < 11)
+			{
+				if (Mathf.Abs(cFuelRate.Value - 40f) < 0.01f)
+				{
+					cFuelRate.Value = 80f;
+				}
+				if (Mathf.Abs(cFuelTrimRate.Value - 120f) < 0.01f)
+				{
+					cFuelTrimRate.Value = 240f;
+				}
+				Log.LogInfo("Ifrit 0.4.1 defaults: FuelTransferRate 80, FuelTrimRate 240.");
+				cAirframeRev.Value = 11;
+				if (devUnlocked)
+				{
+					dev.Save();
+				}
+			}
+			// Ifrit 0.4.2: the damaged-engine cap 30 -> 40; files still on 30 are moved once
+			if (cAirframeRev.Value < 12)
+			{
+				if (Mathf.Abs(cEngDmgCap.Value - 30f) < 0.01f)
+				{
+					cEngDmgCap.Value = 40f;
+				}
+				Log.LogInfo("Ifrit 0.4.2 defaults: EngineDamagedAoACap 40.");
+				cAirframeRev.Value = 12;
+				if (devUnlocked)
+				{
+					dev.Save();
+				}
+			}
+			// Ifrit 0.4.5: throttle response back to the game's own (1.3 -> 1); files still on 1.3 are moved once
+			if (cAirframeRev.Value < 13)
+			{
+				if (Mathf.Abs(cThrResp.Value - 1.3f) < 0.001f)
+				{
+					cThrResp.Value = 1f;
+				}
+				Log.LogInfo("Ifrit 0.4.5 defaults: ThrottleResponseScale 1.");
+				cAirframeRev.Value = 13;
+				if (devUnlocked)
+				{
+					dev.Save();
+				}
+			}
 			// Ifrit 0.3.0: keys this build no longer reads (the F-22E-only settings, keys that moved section) are dropped from
 			// both files instead of being carried as orphans
 			DropOrphans(cfg, true);
 			DropOrphans(dev, devUnlocked);
+		}
+
+		// true when the player file exists and was written with HostLockVariant's old default (false)
+		private static bool HostLockOldDefault(string path)
+		{
+			try
+			{
+				if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+				{
+					return false;
+				}
+				string[] lines = System.IO.File.ReadAllLines(path);
+				for (int i = 0; i < lines.Length; i++)
+				{
+					if (lines[i].TrimStart().StartsWith("HostLockVariant"))
+					{
+						for (int k = i - 1; k >= 0 && k >= i - 4; k--)
+						{
+							string l = lines[k].Trim();
+							if (l.StartsWith("# Default value:"))
+							{
+								return l.EndsWith("false", System.StringComparison.OrdinalIgnoreCase);
+							}
+						}
+						return false;
+					}
+				}
+			}
+			catch (System.Exception)
+			{
+			}
+			return false;
 		}
 
 		public static bool DevUnlocked { get; private set; }
@@ -1710,6 +1993,7 @@ namespace Ifrit_KR67.FCS
 
 		public static void ApplyPatches(Harmony h)
 		{
+			MpPolicy.Install(h, (string what, Action a) => TryPatch(h, what, a));
 			TryPatch(h, "ControlsFilter.Filter", delegate
 			{
 				h.Patch(AccessTools.Method(typeof(ControlsFilter), "Filter"), new HarmonyMethod(typeof(Hooks), "FilterPrefix"));

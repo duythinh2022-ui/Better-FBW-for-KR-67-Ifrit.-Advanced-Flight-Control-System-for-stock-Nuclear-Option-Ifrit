@@ -15,6 +15,21 @@ namespace Ifrit_KR67.FCS
 
 		public readonly float stallAoA;
 
+		// 0.4.3: the foil's lift-slope knee (see AirfoilTable.KneeAoADeg), cached per slope fraction
+		private float kneeFrac = -1f;
+
+		private float kneeAoA;
+
+		public float KneeAoA(float frac)
+		{
+			if (frac != kneeFrac)
+			{
+				kneeFrac = frac;
+				kneeAoA = (foil != null) ? foil.KneeAoADeg(frac) : stallAoA;
+			}
+			return kneeAoA;
+		}
+
 		public float origPitchRange;
 
 		public float origRollRange;

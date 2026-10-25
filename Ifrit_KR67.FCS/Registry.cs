@@ -121,6 +121,12 @@ namespace Ifrit_KR67.FCS
 			{
 				return;
 			}
+			// 0.4.0 multiplayer: the airframe and engine changes are part of the FCS package; a client the host does not
+			// allow keeps the stock jet (checked again every 0.5 s in case the policy arrives later)
+			if (!MpPolicy.FcsAllowed)
+			{
+				return;
+			}
 			float time = Time.time;
 			if (setupRetry.TryGetValue(instanceID, out var value) && time < value)
 			{
@@ -150,6 +156,19 @@ namespace Ifrit_KR67.FCS
 					}
 					v.y = 0f;
 					Acc.TF_vec(item) = v;
+					// Ifrit 0.4.1: throttle response (every variant): the engine's spool rate and the afterburner's light-up speed
+					if (Mathf.Abs(Plugin.ThrottleResponseScale - 1f) > 0.0001f)
+					{
+						Acc.TF_spoolRate(item) *= Plugin.ThrottleResponseScale;
+						JetNozzle[] arrS = Acc.TF_nozzles(item);
+						if (arrS != null)
+						{
+							for (int si = 0; si < arrS.Length; si++)
+							{
+								Acc.JN_scaleAbSmoothing(arrS[si], Plugin.ThrottleResponseScale);
+							}
+						}
+					}
 					if (Mathf.Abs(Plugin.ThrustScale - 1f) > 0.0001f)
 					{
 						Acc.TF_staticThrust(item) *= Plugin.ThrustScale;
@@ -444,11 +463,13 @@ namespace Ifrit_KR67.FCS
 			if (!((UnityEngine.Object)(object)a == null) && controllers.TryGetValue(((UnityEngine.Object)(object)a).GetInstanceID(), out var value))
 			{
 				value.Engaged = false;
+				value.ThrustMatchClear();
 			}
 		}
 
 		public static void Remove(FcsController c)
 		{
+			c.ThrustMatchClear();
 			c.Dispose();
 			if ((UnityEngine.Object)(object)c.ac != null)
 			{

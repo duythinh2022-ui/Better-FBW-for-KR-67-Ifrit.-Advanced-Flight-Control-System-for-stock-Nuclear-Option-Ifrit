@@ -10,7 +10,7 @@ namespace Ifrit_KR67.FCS
 	[BepInDependency(DevGuid, BepInDependency.DependencyFlags.SoftDependency)]
 	public class FcsStandalonePlugin : BaseUnityPlugin
 	{
-		public const string Version = "0.3.2";
+		public const string Version = "0.4.9";
 
 		// the dev/debug unlock: a separate, empty plugin DLL. When it is loaded (soft dependency, so before this one),
 		// every setting other than the player ones is bound to its config file and shows in the ConfigurationManager
@@ -35,6 +35,26 @@ namespace Ifrit_KR67.FCS
 			Plugin.ApplyPatches(new Harmony("tom.ifrit_kr67.fcs"));
 			cfgFile = base.Config;
 			devFile = devUnlocked ? dev : null;
+			// 0.4.0 multiplayer: the host's policy follows its settings (a change in F1, on disk or by migration)
+			base.Config.SettingChanged += delegate
+			{
+				MpPolicy.SettingsChanged();
+			};
+			base.Config.ConfigReloaded += delegate
+			{
+				MpPolicy.SettingsChanged();
+			};
+			if (devUnlocked)
+			{
+				dev.SettingChanged += delegate
+				{
+					MpPolicy.SettingsChanged();
+				};
+				dev.ConfigReloaded += delegate
+				{
+					MpPolicy.SettingsChanged();
+				};
+			}
 			cfgStamp = Stamp(cfgFile);
 			devStamp = Stamp(devFile);
 		}
@@ -67,6 +87,7 @@ namespace Ifrit_KR67.FCS
 
 		private void Update()
 		{
+			MpPolicy.Tick();
 			if (UnityEngine.Time.unscaledTime < nextCheck)
 			{
 				return;

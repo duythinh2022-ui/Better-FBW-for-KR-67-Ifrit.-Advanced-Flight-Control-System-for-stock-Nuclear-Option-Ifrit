@@ -627,6 +627,38 @@ namespace Ifrit_KR67.FCS
 						}
 					}
 				}
+				// Ifrit 0.4.9 (F-22E 2.4.7): a local Newton candidate. The pass above only tries the effector's grid points (the nozzles': every
+				// 4 deg) and a parabola through the best of them, so an effector sitting between two points stays put when
+				// neither point beats where it is, however large the miss. The Gauss-Newton steps before it are joint: with
+				// the stabs on their stall plateau and a large yaw miss the line search rejects them all, and the nozzles,
+				// the one pitch effector with a gradient, were never moved (bench, corkscrew release at 64 deg: nozzles
+				// frozen 0.15 s at -3.8 deg with a 2-10 deg/s^2 nose-down pitch miss; the hold sagged to q -2.5).
+				if (CoordNewton == 2 || (CoordNewton == 1 && effector5 is TvcEffector))
+				{
+					float xc = (float)x[num27];
+					float hN = 0.25f * effector5.Step;
+					float aN = Mathf.Max(effector5.lo, xc - hN);
+					float bN = Mathf.Min(effector5.hi, xc + hN);
+					if (bN > aN + 1E-05f)
+					{
+						Vector3 gN = E(effector5.MAt(bN) - effector5.MAt(aN)) / (bN - aN);
+						Vector3 rN = E(effector5.MAt(xc) - vector4);
+						float rn2 = effector5.RegN * effector5.RegN;
+						double denN = (double)Vector3.Dot(gN, gN) + (double)(regScale * (effector5.mu + effector5.lam) / rn2);
+						if (denN > 1E-12)
+						{
+							double grN = (double)Vector3.Dot(gN, rN) + (double)(regScale * (effector5.mu * xc + effector5.lam * (xc - p)) / rn2);
+							float cN = Mathf.Clamp((float)((double)xc - grN / denN), effector5.lo, effector5.hi);
+							float costN = Cost(effector5.MAt(cN) - vector4) + Reg(effector5, cN, p) + PairRegWith(num27, cN) + FightCostWith(num27, cN) + PitchFightCostWith(num27, cN);
+							if (costN < num29)
+							{
+								num29 = costN;
+								num30 = cN;
+								coordNewtonMoves++;
+							}
+						}
+					}
+				}
 				x[num27] = num30;
 				vector2 = vector3 + effector5.MAt(num30);
 			}
@@ -639,6 +671,10 @@ namespace Ifrit_KR67.FCS
 				act[num40].cmd = Mathf.Clamp((float)x[num40], act[num40].lo, act[num40].hi);
 			}
 		}
+
+		public static int CoordNewton = 1;
+
+		public int coordNewtonMoves;
 
 		public static bool RegOrigRange = true;
 

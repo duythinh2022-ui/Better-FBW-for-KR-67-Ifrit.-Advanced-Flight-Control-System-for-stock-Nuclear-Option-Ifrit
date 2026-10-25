@@ -344,6 +344,55 @@ namespace Ifrit_KR67.FCS
 
 		private Lpf bdkF;
 
+		// Ifrit 0.3.5: sideslip predictor history (commanded rS less gravity, washed out) and its frame times
+		private readonly float[] slipHistV = new float[256];
+
+		private readonly float[] slipHistDt = new float[256];
+
+		private int slipHistN;
+
+		private int slipHistHead;
+
+		private float slipHistLp;
+
+		public float slipPredDbg;
+
+		public float slipHoldDbg = 1f;
+
+		private void SlipHistPush(float x, float dt)
+		{
+			float tw = Plugin.SlipPredictWashout;
+			slipHistLp = (tw > 0f) ? (slipHistLp + (x - slipHistLp) * (dt / (tw + dt))) : 0f;
+			slipHistHead = (slipHistHead + 1) % slipHistV.Length;
+			slipHistV[slipHistHead] = x - slipHistLp;
+			slipHistDt[slipHistHead] = dt;
+			if (slipHistN < slipHistV.Length)
+			{
+				slipHistN++;
+			}
+		}
+
+		private float SlipHistSum(float window)
+		{
+			float sum = 0f;
+			float tt = 0f;
+			int idx = slipHistHead;
+			for (int k = 0; k < slipHistN && tt < window; k++)
+			{
+				float d = Mathf.Min(slipHistDt[idx], window - tt);
+				sum += slipHistV[idx] * d;
+				tt += slipHistDt[idx];
+				idx = (idx - 1 + slipHistV.Length) % slipHistV.Length;
+			}
+			return sum;
+		}
+
+		private void SlipHistClear()
+		{
+			slipHistN = 0;
+			slipHistLp = 0f;
+		}
+
 		public float slipRateDbg;
 
 		public float sweepLimDbg;
@@ -401,6 +450,23 @@ namespace Ifrit_KR67.FCS
 		public float decelDbg;
 
 		private float decelF;
+
+		// Ifrit 0.4.0: split-deceleron yaw tier gate (0..1), engine out / damaged yaw axis only
+		private float splitTierF;
+
+		public float splitTierDbg;
+
+		public float tierDemDbg, tierReachDbg, tierSplitDbg;
+
+		internal static float SplitTierRise = 3f;
+
+		internal static float SplitTierFall = 1.5f;
+
+		internal static float SplitYawClose = 0.6f;
+
+		internal static float SplitYawSatOpen = 0.05f;
+
+		internal static float SplitYawSatSpan = 0.6f;
 
 		private float decelYieldF;
 
@@ -1010,6 +1076,29 @@ namespace Ifrit_KR67.FCS
 
 		public float tvcNeutralDbg;
 
+		public float fightGateDbg;
+
+		// 0.4.3: the 0.4.1 roll-fight exemption with an engine down on thrust (not only out); false (see the fight gate)
+		internal static bool FightExemptAsym = false;
+
+		// bench/debug: local AoA now of the k-th stabilator (order of the surfaces list)
+		public float StabLocalAoA(int k)
+		{
+			int n = 0;
+			foreach (SurfaceEffector se in surfaces)
+			{
+				if (se.kind == SurfaceKind.Stabilator)
+				{
+					if (n == k)
+					{
+						return se.localAoANow;
+					}
+					n++;
+				}
+			}
+			return 0f;
+		}
+
 		// Ifrit 0.3.0: roll-TVC neutral hold weight
 		public float tvcRollNeutralW;
 
@@ -1105,6 +1194,11 @@ namespace Ifrit_KR67.FCS
 
 		private Vector3 asymMT;
 
+		// bench/debug: the sweep's thrust moment as yaw accel (deg/s^2), and whether the pitch / differential TVC effectors are active
+		public float AsymMTYaw => AccYaw(asymMT);
+
+		public int TvcActiveDbg => (tvc != null && tvc.active ? 1 : 0) + (tvcd != null && tvcd.active ? 2 : 0);
+
 		private float[] asymDsym;
 
 		public float Lp = -100000f;
@@ -1156,6 +1250,30 @@ namespace Ifrit_KR67.FCS
 		public float mQO;
 
 		public float hybridDM;
+
+		private float dHatPrevY;
+
+		private bool dHatInit;
+
+		internal float dDotYF;
+
+		private float distLeadGate;
+
+		internal float distLeadAcc;
+
+		internal static float DistLeadTau = 0.06f;
+
+		internal static float DistLeadMax = 15f;
+
+		internal static bool DistLeadNoDamp = true;
+
+		internal static float DistLeadTw0 = 0.2f;
+
+		internal static float DistLeadTw1 = 0.4f;
+
+		internal static float NewtonMinTw = 0.25f;
+
+		internal static bool NewtonReleasedOnly = true;
 
 		private Lpf alphaIndiF;
 
@@ -2031,6 +2149,37 @@ namespace Ifrit_KR67.FCS
 			}
 			AsymPrepSym(rootRot);
 			FlapSymStep(dt);
+			// 0.4.1: entering the engine-out / damaged-engine state, the cap from the last sweep was judged with the thrust
+			// term in (and below AsymMinIAS there is no next sweep to replace it): it is replaced by the fixed cap at once
+			// and a fresh sweep (thrust term out) is started, so a damage at high AoA and low speed gets the fixed cap and
+			// not a stale 12 deg.
+			bool fixedNow = (engOut || engAsym) && EngineOutFixedCap;
+			if (fixedNow && !engFixedPrev && asymValid)
+			{
+				float capF = engOut ? Plugin.EngineOutAoACap : Plugin.EngineDamagedAoACap;
+				asymCapPos = capF;
+				asymCapNeg = 0f - capF;
+				PushCapSample(asymCapPos, asymCapNeg, reset: true);
+				asymK = -1;
+				asymTimer = 1f;
+			}
+			// leaving it because the thrust match took the split away: the limit is lifted at once to the aero-only cap
+			// (the sweep's arrays were made without the thrust term) instead of relaxing up over 1.5 s - the "hitch" at 29 deg
+			// on the way to the full AoA (23 Oct 00:00 / 00:06 logs: capEff 30 -> 55 in 1.5 s after each engagement)
+			if (!fixedNow && engFixedPrev && asymValid && matchFull)
+			{
+				asymCapPos = AsymCap.Find(asymAlphas, asymU, asymAlphas.Length, 1, Plugin.AoAPos, Mathf.Min(Plugin.AsymCapFloor, Plugin.AoAPos), AsymCapUMax);
+				asymCapNeg = AsymCap.Find(asymAlphas, asymU, asymAlphas.Length, -1, Plugin.AoANeg, 0f - Mathf.Min(Plugin.AsymCapFloorNeg, 0f - Plugin.AoANeg), AsymCapUMax);
+				PushCapSample(asymCapPos, asymCapNeg, reset: true);
+				asymCapPosEff = asymCapPos;
+				asymCapNegEff = asymCapNeg;
+				tKHoldT = 1f;
+			}
+			if (!fixedNow)
+			{
+				tKHoldT = Mathf.Max(0f, tKHoldT - dt);
+			}
+			engFixedPrev = fixedNow;
 			asymMNow = AsymMomentAt(alpha, rho, rootRot, ref ctx);
 			Vector3 vector = asymMF.Step(asymMNow, Mathf.Max(0.05f, Plugin.AsymFFWashout), dt);
 			float num = Mathf.Max(0.01f, Plugin.AsymDeadband);
@@ -2063,6 +2212,12 @@ namespace Ifrit_KR67.FCS
 				{
 					asymCapPos = Mathf.Min(asymCapPos, Plugin.EngineOutAoACap);
 					asymCapNeg = Mathf.Max(asymCapNeg, 0f - Plugin.EngineOutAoACap);
+				}
+				else if (engAsym && EngineOutFixedCap)
+				{
+					// Ifrit 0.4.1: a weak (damaged, running) engine gets its own fixed cap, not the dynamic thrust cap
+					asymCapPos = Mathf.Min(asymCapPos, Plugin.EngineDamagedAoACap);
+					asymCapNeg = Mathf.Max(asymCapNeg, 0f - Plugin.EngineDamagedAoACap);
 				}
 				asymCapPitch = 999f;
 				float capGate = Mathf.Clamp01((Mathf.Abs(asymDy) - CoupHeldDy0) / CoupHeldDySpan);
@@ -2120,7 +2275,7 @@ namespace Ifrit_KR67.FCS
 			{
 				CapFilterStep(dt);
 				float upRate = Plugin.AsymRelax * (1f + Mathf.Max(0f, Plugin.AsymRelaxBoost) * (1f - Mathf.Clamp01(AsymCap.Interp(asymAlphas, asymU, asymAlphas.Length, asymCapPosEff))));
-				float tightR = Plugin.AsymTighten * (engOut ? Mathf.Max(1f, EngOutTightenK) : 1f);
+				float tightR = Plugin.AsymTighten * ((engOut || engAsym) ? Mathf.Max(1f, EngOutTightenK) : 1f);
 				asymCapPosEff = AsymCap.Slew(asymCapPosEff, asymCapFilt, 1, tightR, upRate, dt);
 				asymCapNegEff = AsymCap.Slew(asymCapNegEff, asymCapFiltNeg, -1, tightR, upRate, dt);
 				asymUNow = AsymCap.Interp(asymAlphas, asymU, asymAlphas.Length, alpha);
@@ -2338,6 +2493,7 @@ namespace Ifrit_KR67.FCS
 
 		private void AsymSweepPrep(Quaternion rootRot)
 		{
+			asymSweepIas = Mathf.Max(ias, 1f);
 			AsymPrepSym(rootRot);
 			asymMT = ((tvc.active || Plugin.DisableTVC) ? ((tvcd != null && tvcd.active) ? tvc.MAt(tvc.now) : tvc.Mnow) : Vector3.zero);
 		}
@@ -2534,7 +2690,7 @@ namespace Ifrit_KR67.FCS
 				// 2.0.13: with an engine out the thrust part is left out of the cap altogether (the cap is the fixed
 				// EngineOutAoACap plus whatever an aerodynamic asymmetry needs): the thrust yaw is the throttle's business
 				// (VMC protection), and judging it here made the cap follow speed and throttle, 12 <-> 65 deg in seconds
-				float tK = (engOut && EngineOutFixedCap) ? 0f : 1f;
+				float tK = (((engOut || engAsym) && EngineOutFixedCap) || tKHoldT > 0f) ? 0f : 1f;
 				float arL = kq * (asymAr[i] - arT) + tK * arT;
 				float ayL = kq * (asymAy[i] - ayT) + tK * ayT;
 				asymU[i] = Mathf.Max(0f, Mathf.Abs(arL) - num15) / Mathf.Max(crK - num13, 1f) + Mathf.Max(0f, Mathf.Abs(ayL) - num16) / Mathf.Max(cyK - num14, 1f);
@@ -2811,6 +2967,7 @@ namespace Ifrit_KR67.FCS
 			Vector3 vector5 = accF.Step(x, 0.05f, num);
 			Vector3 lhs = vector5 - Physics.gravity;
 			nz = Vector3.Dot(lhs, transform.up) / 9.81f;
+			nxDbg = Vector3.Dot(lhs, transform.forward) / 9.81f;   // 0.4.6 telemetry: body-axis specific force along the nose (g)
 			Vector3 vector6 = ((tas > 1f) ? Vector3.Cross(vector2, transform.right).normalized : transform.up);
 			eLy = vector6.y;
 			float vc = Mathf.Max(tas, 30f);
@@ -2975,7 +3132,33 @@ namespace Ifrit_KR67.FCS
 			float aIndiF = alphaIndiF.Step(alpha, IndiTau, num);
 			float qIndiFv = qIndiF.Step(omega.y * 57.29578f, IndiTau, num);
 			// faded out from 25 to 40 deg AoA: the lag matters at high dynamic pressure, and the stalled-foil slopes up there cost roll (bench, full pull + roll at 350 km/h, 64 deg: bank at 1 s 60 -> 48 deg without the fade)
-			hybridDM = (1f - Mathf.InverseLerp(25f, 40f, Mathf.Abs(alpha))) * ((Mathf.Abs(alpha) < 80f && tas > 30f) ? (mAlphaO * Mathf.Clamp(alpha - aIndiF, -5f, 5f) + mQO * Mathf.Clamp(omega.y * 57.29578f - qIndiFv, -20f, 20f)) : 0f);
+			float hybLo = 1f - Mathf.InverseLerp(25f, 40f, Mathf.Abs(alpha));
+			hybridDM = hybLo * ((Mathf.Abs(alpha) < 80f && tas > 30f) ? (mAlphaO * Mathf.Clamp(alpha - aIndiF, -5f, 5f) + mQO * Mathf.Clamp(omega.y * 57.29578f - qIndiFv, -20f, 20f)) : 0f);
+			// Ifrit 0.4.9 (F-22E 2.4.7/2.4.8) disturbance-rate lead; the bench figures below are the F-22E's. INDI's pitch target is I(wdot_des - d), d = the filtered measured pitch acceleration
+			// less the effectors' modelled share (the airframe's own moment, gravity-driven AoA change, coupling, model error:
+			// everything the effectors are not doing). INDI uses d as it was IndiTau ago and the nozzles need ~0.1 s more to
+			// deliver, so while d falls steadily the effectors trail it by d' x that lag and the rate hold sags. After a
+			// corkscrew release the fuselage loses ~15 deg/s^2 of nose-up in half a second as the AoA drops 57 -> 48 deg
+			// (bench: d' about -30 deg/s^3; 24 Oct 22:26 log, 118.3 s: q -3.7). Most of that dip was the allocator leaving the
+			// nozzles short (Allocator, CoordNewton); this covers the lag that remains (bench, corkscrew release at 1 km:
+			// q min -1.38 -> -0.68). The lead takes d forward by d' x HybridIndiHighAoALead. Model-free on purpose:
+			// the stalled-foil slopes the 1.9.0 hybrid lead uses have the wrong sign up here (the fuselage's moment falls as
+			// the AoA falls through 57-41 deg). Above the 25-40 deg fade only, with the pitch stick released (zero-rate hold
+			// or AoA-limit ride with the stick centred); with the stick in, the previous law (a held pull + roll at 64 deg lost
+			// roll rate to a high-AoA lead: bench, 350 km/h, bank at 1 s 74 -> 58 deg).
+			float dHatY = vector7.y - IaInv[1, 1] * vector8.y;
+			float dDotRaw = (dHatInit && num > 1E-05f) ? ((dHatY - dHatPrevY) / num) : 0f;
+			dHatPrevY = dHatY;
+			dHatInit = havePrev;
+			// the airframe's pitch damping is in d too; its rate (mQ x the pitch acceleration) is the rate loop's own doing, not
+			// a disturbance, and leading it fought the capture (bench: q 1.4 -> -0.5 deg/s at the moment the hold took over)
+			dDotRaw -= DistLeadNoDamp ? (IaInv[1, 1] * mQO * vector7.y * 57.29578f) : 0f;
+			dDotYF += (Mathf.Clamp(dDotRaw, -10f, 10f) - dDotYF) * (num / (DistLeadTau + num));
+			// its horizon is the nozzles' response: with their thrust near idle the stabs carry the pitch and the lead only
+			// shuffled them (bench, idle release at 380 km/h: q min -0.9 -> -2.0), so it fades out with T/W 0.4 -> 0.2
+			float hiGate = (1f - hybLo) * (1f - Mathf.Clamp01((Mathf.Abs(sp) - 0.03f) / 0.15f)) * ((tas > 30f && Mathf.Abs(alpha) < 80f) ? 1f : 0f) * Mathf.InverseLerp(DistLeadTw0, DistLeadTw1, tw);
+			distLeadGate = Mathf.MoveTowards(distLeadGate, hiGate, num / 0.15f);
+			distLeadAcc = distLeadGate * Mathf.Clamp(dDotYF * Plugin.HybridIndiHighAoALead, -DistLeadMax * (MathF.PI / 180f), DistLeadMax * (MathF.PI / 180f));
 			omegaPrev = omega;
 			velPrev = rb.velocity;
 			havePrev = true;
@@ -3150,9 +3333,29 @@ namespace Ifrit_KR67.FCS
 			// at 30 deg AoA: pitch-rate dip -4 -> -8 deg/s). The locked sets formed and held with the pitch settled.
 			// 2.2.21: not with a fin lost or the deceleron split working: the surfaces are crossed on purpose there (wing for
 			// yaw, stabs for the roll it makes), and pricing it froze the stabs for pitch (19 Oct 22:05 log, fins gone)
+			// Ifrit 0.4.1: nor with an engine out or down on thrust: the thrust yaw is held by the tails' differential with
+			// the wing taking the roll it makes. Priced, the allocator sat on the cliff of the sign-dependent cost (the wing
+			// may cancel the tails' roll only once it over-cancels it) and flipped between two corner sets: tails -10/+21
+			// with the inboard flaperon on its stop, or the left tail on its stop at 47 deg local AoA (16 kN of drag) with the
+			// nozzle at 15 deg for the pitch (22 Oct 22:15 log, right engine destroyed, right banks at 90-110 m/s).
+			// The cost comes back as the yaw saturates (yawSat 0.05 -> 0.35): on a hard pull with the tails spent it keeps the
+			// crossed flaperon sets and the splits to what the yaw needs (bench, 300 km/h mil pull to 22 deg: 27 km/h slower
+			// after 14 s with the cost simply off).
+			// 0.4.3: with an engine OUT only. With an engine down on thrust but running (a third to a half of the split), the
+			// cost being off is what let the crossed set hold: 23 Oct 00:51 log, 112.5-122.4 s, stabs +45/+27 (the left on
+			// its stop at 41-47 deg of local AoA) against the nozzle at -15 and the crossed wing for 10 s with the stick
+			// centred, fightGate 0 - and it collapsed within 0.3 s of the gate coming back at 122.3 s (yawSat 0.5). Of the
+			// two corner sets the 0.4.1 exemption was made for, the stab on its stop is now excluded by the settled stall
+			// window (0.4.3, StabParkEscape). Bench, the log's push and release at 55 m/s: with the exemption the wing stays
+			// crossed (ailerons -30/+26) for 10 s; without it the wing is symmetric within 3 s.
 			float relFin = (yawHealth > 0.99f && decelF <= 0.01f) ? 1f : 0f;
+			if (engOut || (engAsym && FightExemptAsym))
+			{
+				relFin *= Mathf.Clamp01((yawSat - 0.05f) / 0.3f);
+			}
 			float relQuiet = (Plugin.RollFightReleased && FightMode == 0) ? relFin * ((RelQuietHold ? (1f - pfQHold) : 1f) * (1f - Mathf.Clamp01((Mathf.Abs(omega.y * 57.29578f - qT) - RelQuietErr0) / Mathf.Max(0.1f, RelQuietErrSpan)))) : 1f;
 			float fightGate = (fightMode == 1) ? 1f : ((fightMode == 2) ? Mathf.Max(fightPed, (1f - fightRollHold) * relQuiet) : fightPed);
+			fightGateDbg = fightGate;
 			alloc.fightK = ((Engaged && Mode != FcsMode.Ground && Mode != FcsMode.Off) ? (Mathf.Max(0f, Plugin.RollFightCost) * fightGate) : 0f);
 			// 1.8.42: stab-vs-nozzle pitch fight, while a roll is commanded (and RpRelease after)
 			// not while the pitch-rate command is moving (captures, releases: the nozzles are the fast pitch effector there),
@@ -3251,6 +3454,69 @@ namespace Ifrit_KR67.FCS
 					}
 				}
 			}
+			// 0.4.3 (the F-22E's 2.3.0/2.3.1 settled stall window, ported, on top of the 2.2.15 one - which stays: it keeps a
+			// stab from running past the 45 deg peak into falling lift, and the engine-out trims lean on it (bench, engine-out
+			// pull at 250 km/h without it: 9.9 deg of sideslip and the VMC cutting the throttle, against 2.9 and none).
+			// The 2.2.15 window only acts below 30 deg AoA and allows the peak itself. On this jet the stabilator foil has no
+			// stall before 45 deg: its lift keeps
+			// rising from 20 to 45 deg of local AoA at a fifth of the linear slope and less (0.17 /rad at 40), so a stab parked
+			// out there is "attached" to the 2.2.15 window and the allocator has next to no gradient to bring it back, while it
+			// makes its maximum lift: 23 Oct 00:51 log, 112.5-122.4 s, after a full push through zero AoA at 58 m/s with an
+			// engine down on thrust - left stab on its stop at +45 (local AoA -41 to -47) for 10 s with the stick centred, the
+			// right at +27, the nozzle at -15 against them, the wing crossed, 3-7 deg of sideslip at 70-130 m/s, released all at
+			// once at 128 m/s. Bench, same push at 55 m/s: right stab at -37.5/-40.5 (local 47-49) for 10 s.
+			// Now: with the lateral stick and pedals centred and the lateral rates settled (the stop finished), the stabilators
+			// and rudders may not rest past the smaller of (peak - SettledStallMargin) and the foil's lift-slope knee (where
+			// the slope has fallen to SettledSlopeFrac of its steepest, 26 deg on this foil at 0.15) of local AoA, at any AoA
+			// where such an attached range exists (none: the window is left open); a surface outside is walked in at
+			// SettledWalkRate. The gate latches on below SettledRateOn deg/s of body roll and yaw and off above SettledRateOff,
+			// or with lateral input. Telemetry: settledWin.
+			// Not while the thrust yaw is loading the fins (|asymAy| / asymCy above SettledYawUse): this jet has no rudders -
+			// its yaw is the canted stabilators (10 deg of yaw per 35 of pitch), the nozzles and the deceleron split - and with
+			// an engine out a stab run out to 47-63 deg of local AoA is its drag rudder. Bench, engine-out pull at 250 km/h to
+			// 22 deg: windowed, the yaw went to the deceleron split, saturated (7.6 deg of sideslip) and the VMC cut the
+			// throttle to 0.5 for 3 s; the thrust yaw there is 1.2 x the fins' authority, against 0.29 in the 00:51 log's set.
+			// (the usage filtered 0.5 s, with 0.1 of hysteresis: the raw value dips through 0.5 in the engine-out pulls as the
+			// AoA moves, and the window flickering on there cost 1-2 deg of sideslip)
+			float yawUse = (asymValid && asymCyNow > 1f) ? (Mathf.Abs(asymAyNow) / asymCyNow) : 0f;
+			settledUseF += (yawUse - settledUseF) * Mathf.Clamp01(num / 0.5f);
+			if (settledUseF > Plugin.SettledYawUse)
+			{
+				settledUseHi = true;
+			}
+			else if (settledUseF < Plugin.SettledYawUse - 0.1f)
+			{
+				settledUseHi = false;
+			}
+			if (Plugin.StabParkEscape && !isAI && Engaged && Mode != FcsMode.Ground && Mode != FcsMode.Off)
+			{
+				float latRate = Mathf.Max(Mathf.Abs(omega.x), Mathf.Abs(omega.z)) * 57.29578f;
+				bool latIn = Mathf.Abs(sr) >= 0.05f || Mathf.Abs(sy) >= 0.05f;
+				if (latIn || latRate > Plugin.SettledRateOff || settledUseHi)
+				{
+					settledWin = false;
+				}
+				else if (latRate < Plugin.SettledRateOn)
+				{
+					settledWin = true;
+				}
+				if (settledWin)
+				{
+					foreach (SurfaceEffector sw in surfaces)
+					{
+						if ((sw.kind == SurfaceKind.Stabilator || (SettledWindowRudders && sw.kind == SurfaceKind.Rudder)) && sw.active)
+						{
+							float lim = Mathf.Min(sw.stallAoA - Plugin.SettledStallMargin, sw.KneeAoA(Plugin.SettledSlopeFrac));
+							SettledWindow(sw, Mathf.Max(5f, lim), Plugin.SettledWalkRate, num);
+						}
+					}
+				}
+			}
+			else
+			{
+				settledWin = false;
+			}
+			settledWinDbg = settledWin;
 			nAlphaTimer += num;
 			if (nAlphaTimer > 0.1f)
 			{
@@ -3484,7 +3750,9 @@ namespace Ifrit_KR67.FCS
 					SurfaceEffector surfaceEffector4 = surfaces[n];
 					// 2.0.7: on the runway the rudders split with the pitch stick too (pull = the nose-up split), as for rotation
 					float gToe = (Plugin.RudderPitchAid && surfaceEffector4.kind == SurfaceKind.Rudder) ? ((0f - num19) * Plugin.RudderToeMax) : 0f;
-					surfaceEffector4.cmd = Mathf.Clamp(num19 * surfaceEffector4.origPitchRange + num20 * surfaceEffector4.origRollRange + num21 * surfaceEffector4.origYawRange + brakeBias[n] + gToe, surfaceEffector4.min, surfaceEffector4.max);
+					// Ifrit 0.3.6 (DeceleronHldFold): on the runway the decelerons carry the HLD's flap share as droop (TE-down = -teUp)
+					float gDroop = (surfaceEffector4.kind == SurfaceKind.Flaperon && flaps != null && Plugin.DeceleronHldFold) ? ((0f - surfaceEffector4.teUp) * flaps.decHl) : 0f;
+					surfaceEffector4.cmd = Mathf.Clamp(num19 * surfaceEffector4.origPitchRange + num20 * surfaceEffector4.origRollRange + num21 * surfaceEffector4.origYawRange + brakeBias[n] + gToe + gDroop, surfaceEffector4.min, surfaceEffector4.max);
 				}
 				tvc.cmd = Mathf.Clamp((0f - num19) * tvc.max + groundBrake * Plugin.GroundBrakeTvc, tvc.min, tvc.max);
 				// Ifrit 0.2.2: no allocator on the ground, so with the brake out the splits are held at zero retraction (full
@@ -3552,6 +3820,7 @@ namespace Ifrit_KR67.FCS
 				mDotYF = mDotYF + (mDotY - mDotYF) * (num / (MLeadTau + num));
 				vector11 = vector8 + MulI(omegaDotDes - vector7);
 				vector11.y -= Plugin.HybridIndiGain * hybridDM;
+				vector11.y -= MulI(new Vector3(0f, distLeadAcc, 0f)).y;
 				if (Plugin.ReleasedMomentLead > 0f)
 				{
 					float leadGate = (1f - Mathf.Clamp01((Mathf.Abs(sp) - 0.03f) / 0.15f)) * (1f - Mathf.Clamp01(Mathf.Abs(qTraj.v) / 20f)) * ((Mathf.Abs(qT) < 1f && !prot && !unload) ? 1f : 0f) * stabPitchFrac;
@@ -3588,7 +3857,7 @@ namespace Ifrit_KR67.FCS
 				// other surface where it is now, so the rest of the allocation is not traded away for yaw it cannot get.
 				decelDbg = 0f;
 				alloc.fightW[1] = (alloc.fightW[2] = (alloc.fightW[3] = 1f));
-				if (YawTargetClamp && (yawHealth < 0.999f || engOut))
+				if (YawTargetClamp && (yawHealth < 0.999f || engOut || engAsym))
 				{
 					bool hasRudders = false;
 					foreach (SurfaceEffector sR in surfaces)
@@ -3604,6 +3873,8 @@ namespace Ifrit_KR67.FCS
 					float rudHi = 0f;
 					float decelLo = 0f;
 					float decelHi = 0f;
+					float splitLo = 0f;
+					float splitHi = 0f;
 					foreach (Effector eY in effs)
 					{
 						if (!eY.active)
@@ -3624,10 +3895,23 @@ namespace Ifrit_KR67.FCS
 							decelLo += Mathf.Min(0f, fl - zNow);
 							decelHi += Mathf.Max(0f, fh - zNow);
 						}
-						// Ifrit: no rudders. The yaw sources are the split decelerons and the canted tails, so the clamp is to
+						// Ifrit: no rudders. The yaw sources are the canted tails and the split decelerons, so the clamp is to
 						// what they reach (with the rest where it is now); without this the yaw target froze at the moment
 						// the engine quit (engine-out pull at 300 km/h: sideslip 36-65 deg, splits idle).
-						if ((eY is SurfaceEffector sY && (sY.kind == SurfaceKind.Rudder || (!hasRudders && sY.kind == SurfaceKind.Stabilator))) || (!hasRudders && eY is SplitEffector))
+						// Ifrit 0.4.0 (SplitYawTier): the splits are a tier of their own, after the tails (see below).
+						if (!hasRudders && eY is SplitEffector && Plugin.SplitYawTier)
+						{
+							float zl = float.MaxValue;
+							float zh = float.MinValue;
+							for (int iY = 0; iY < eY.N; iY++)
+							{
+								zl = Mathf.Min(zl, eY.M[iY].z);
+								zh = Mathf.Max(zh, eY.M[iY].z);
+							}
+							splitLo += Mathf.Min(0f, zl);
+							splitHi += Mathf.Max(0f, zh);
+						}
+						else if ((eY is SurfaceEffector sY && (sY.kind == SurfaceKind.Rudder || (!hasRudders && sY.kind == SurfaceKind.Stabilator))) || (!hasRudders && eY is SplitEffector))
 						{
 							float zl = float.MaxValue;
 							float zh = float.MinValue;
@@ -3645,6 +3929,68 @@ namespace Ifrit_KR67.FCS
 							rudHi += zNow;
 						}
 					}
+					// Ifrit 0.4.0 (SplitYawTier, dev 3. Lateral-directional): least drag first. With an engine out (or a damaged
+					// yaw axis) the canted tails carry the yaw as long as they can, the split decelerons take the rest, the
+					// flaperon crossing (decelF) and the VMC throttle limit come after. 22 Oct 00:35 log, right engine alone at
+					// AB, 140 m/s, 3 deg AoA: the left split sat at 15-24 deg for 30 s while the tails held +-2 deg of difference
+					// (the split was the allocator's cheapest pure yaw); at the 30 deg cap, 50-85 m/s, the inner/outer flaperons
+					// crossed at +-30 with the splits shut (the deflection had taken the split's travel) and the live engine was
+					// cut to 30-40 %.
+					if (!hasRudders && Plugin.SplitYawTier)
+					{
+						// the tails' yaw comes with roll (they are canted), which the wing must take back: that is the
+						// roll-fight cost's "stabs against the wing" case, so the stab group's fight weight is relaxed by
+						// StabYawRelax here. Without it the allocator leaves the yaw to sideslip rather than pay the fight
+						// (bench, right engine alone at 500 km/h: 2.5 deg of sideslip held with the tails at +-0.1 deg).
+						alloc.fightW[1] = 1f - Mathf.Clamp01(Plugin.StabYawRelax);
+						// The split gate opens on measured yaw saturation (the yaw target out of reach with the splits as bounded
+						// now, after the tails and the flaperon crossing the allocator finds on its own) and leaks shut slowly
+						// (SplitTierFall) once the yaw is met, so it settles on the least split that keeps the yaw met. Bench, yaw
+						// per kN of added drag at 250 km/h, 20 deg AoA: tails +-10 deg 4.8 deg/s^2 per kN, inner/outer crossing
+						// 1.1-1.5, one split at 30 deg 0.4 (17.7 kN for 7.8 deg/s^2), the VMC throttle cut 0.17 (thrust given up).
+						float stYawNow = 0f;
+						foreach (SurfaceEffector sS in surfaces)
+						{
+							if (sS.kind == SurfaceKind.Stabilator && sS.active)
+							{
+								stYawNow += sS.MAt(sS.now).z;
+							}
+						}
+						float sTgt = Mathf.Clamp01((yawSat - SplitYawSatOpen) / SplitYawSatSpan);
+						splitTierF = Mathf.MoveTowards(splitTierF, sTgt, ((sTgt > splitTierF) ? SplitTierRise : SplitTierFall) * num);
+						rudLo += splitTierF * splitLo;
+						rudHi += splitTierF * splitHi;
+						float demSign = Mathf.Sign(stYawNow);
+						foreach (SplitEffector sT in splits)
+						{
+							if (!sT.active || sT.brakeMode)
+							{
+								continue;
+							}
+							// gate on the split's travel; with the gate open the split has priority over the host deceleron's
+							// deflection for their shared travel (the reverse of the normal DeceleronSplitBudget rule), so the
+							// allocator can always open it: the crossing had taken the deceleron's travel first and left the split
+							// nothing (22 Oct 00:35 log, 30 deg cap)
+							float gateHi = Mathf.Min(sT.max, Mathf.Max(sT.now - sT.rate * num, splitTierF * sT.max));
+							sT.hi = Mathf.Max(sT.lo, Mathf.Min(Mathf.Max(sT.hi, gateHi), gateHi));
+							sT.cmd = Mathf.Clamp(sT.cmd, sT.lo, sT.hi);
+							float sReachSide = (demSign > 0f) ? sT.M[sT.N - 1].z : (0f - sT.M[sT.N - 1].z);
+							if (sT.host != null && sT.host.active && splitTierF > 0f && sReachSide > 0f)
+							{
+								float travel = Mathf.Max(sT.host.max, 0f - sT.host.min);
+								float keep = Mathf.Max(0f, travel - Mathf.Max(sT.cmdOut, sT.now));
+								sT.host.hi = Mathf.Max(sT.host.lo, Mathf.Min(sT.host.hi, keep));
+								sT.host.lo = Mathf.Min(sT.host.hi, Mathf.Max(sT.host.lo, 0f - keep));
+								sT.host.cmd = Mathf.Clamp(sT.host.cmd, sT.host.lo, sT.host.hi);
+							}
+						}
+						tierDemDbg = yawSat; tierReachDbg = stYawNow * IaInv[2, 2] * 57.29578f; tierSplitDbg = (splitHi - splitLo) * IaInv[2, 2] * 57.29578f;
+					}
+					else
+					{
+						splitTierF = 0f;
+					}
+					splitTierDbg = splitTierF;
 					float zMargin = YawTargetMargin * (rudHi - rudLo);
 					float zLo = restZ + rudLo - zMargin;
 					float zHi = restZ + rudHi + zMargin;
@@ -3691,6 +4037,8 @@ namespace Ifrit_KR67.FCS
 				else
 				{
 					decelF = 0f;
+					splitTierF = 0f;
+					splitTierDbg = 0f;
 				}
 				// 2.0.6: with the nose wheel on the runway the measured pitch acceleration stays ~0 whatever the surfaces do,
 				// so the incremental (INDI) pitch target would integrate to full nose-up deflection before the nose moves and
@@ -3717,6 +4065,13 @@ namespace Ifrit_KR67.FCS
 				// their travel chasing pitch errors they could not fix (idle at the AoA limit: +-10-13 deg sd). Their movement
 				// costs more as the thrust they vector falls.
 				tvc.lam *= 1f + TvcLowThrustLam * (1f - Mathf.Clamp01(tw / TvcLowThrustTw));
+				// (with the nozzles' thrust near idle their moment per degree is small and the grid's coarse steps were the
+				// only thing holding them still; the Newton step had them chase the hold: bench, idle release at 450 km/h,
+				// q held +1 deg/s for 2 s)
+				// Ifrit 0.4.9: with the pitch stick released only, where the dip is, so a held pull runs 0.4.8's allocation. (Held,
+				// it flipped single bench runs between the two stab roll-split branches of the full-pull + roll approach to 65 deg;
+				// over a 350-560 km/h sweep the slow branch came up 10 times against 0.4.8's 11, so not a trend either way.)
+				Allocator.CoordNewton = (Plugin.AllocNozzleNewton && tw >= NewtonMinTw && (!NewtonReleasedOnly || Mathf.Abs(sp) < 0.18f)) ? 1 : 0;
 				TvcBudgetStep(num, vector11);
 				// 2.2.14 (TvcNeutralHold, Dev): while the pitch rate is held (pitch-rate command steady, no pitch error, no roll
 				// budget in force), the nozzles are drawn back to neutral and the stabs take the steady pitch moment; the
@@ -4409,6 +4764,68 @@ namespace Ifrit_KR67.FCS
 		internal static bool StabWindowAlways = false;
 
 		internal static float StabParkAoA = 30f;
+
+		// 0.4.3 settled stall window (F-22E 2.3.0): like StallWindow, but a surface outside the attached range is brought in at
+		// 'rate' deg/s: the window's near edge starts at the surface's own command and moves toward the range, so the
+		// allocator re-solves around a small step each frame instead of a 30 deg jump
+		private static void SettledWindow(SurfaceEffector se, float lim, float rate, float dt)
+		{
+			float a = float.MaxValue;
+			float b = float.MinValue;
+			for (int i = 0; i < se.N; i++)
+			{
+				float g = se.grid[i];
+				if (Mathf.Abs(se.LocalAoAAt(g)) <= lim)
+				{
+					a = Mathf.Min(a, g);
+					b = Mathf.Max(b, g);
+				}
+			}
+			if (a > b)
+			{
+				return;
+			}
+			float h = 0.5f * se.Step;
+			float lo = Mathf.Max(se.lo, a - h);
+			float hi = Mathf.Min(se.hi, b + h);
+			if (lo > hi)
+			{
+				return;
+			}
+			float c = se.cmd;
+			float step = Mathf.Max(0.01f, rate * dt);
+			if (c < lo)
+			{
+				lo = Mathf.Min(lo, c + step);
+				hi = Mathf.Max(hi, lo);
+			}
+			else if (c > hi)
+			{
+				hi = Mathf.Max(hi, c - step);
+				lo = Mathf.Min(lo, hi);
+			}
+			se.lo = Mathf.Max(se.lo, lo);
+			se.hi = Mathf.Min(se.hi, hi);
+			if (se.lo > se.hi)
+			{
+				se.lo = (se.hi = Mathf.Clamp(c, se.min, se.max));
+			}
+		}
+
+		internal static bool SettledWindowRudders = true;
+
+		private bool settledWin;
+
+		public bool settledWinDbg;
+
+		// 0.4.6 telemetry: the thrust moment's yaw about the CoM, which dMeasY leaves out (the nozzles are an effector, so their
+		// whole moment, the CoM-offset part included, is subtracted there); asymLoadY = dMeasY + asymThrY is the measured load
+		// yaw comparable with asymMy (the model's, thrust included). Plus the mass and the body-axis specific force.
+		public float nxDbg;
+
+		private float settledUseF;
+
+		private bool settledUseHi;
 
 		// narrow lo..hi to the deflections whose local AoA stays within +-lim (keeps the side the surface is on if none do)
 		private static void StallWindow(SurfaceEffector se, float lim)
@@ -6203,6 +6620,133 @@ namespace Ifrit_KR67.FCS
 
 		public bool engOut;
 
+		// Ifrit 0.4.1: one engine running weak (damaged, not destroyed: under EngineAsymEnter of the strongest one's thrust,
+		// released above EngineAsymExit; the ratio is filtered over 1 s so spool-up transients do not trip it)
+		public bool engAsym;
+
+		// 0.4.1: weaker / stronger engine's thrust at full throttle, predicted from their damage state (1 = even)
+		public float engAbRatio = 1f;
+
+		// one engine can still light its afterburner and another cannot (predicted from the damage state)
+		public bool engAbMismatch;
+
+		// 0.4.1 thrust match: the parasitic loss the FCS is holding on the stronger engine(s), N (0 = none), for the telemetry
+		public float engMatchLoss;
+
+		private bool matchApplied;
+
+		private struct EngModel
+		{
+			public float rMin;
+
+			public float rMax;
+
+			public float ceil;
+
+			public float remapX;
+
+			public float remapY;
+
+			public float t0;
+
+			public float ab;
+
+			public float abStart;
+
+			public float abEnd;
+		}
+
+		private readonly EngModel[] engModel = new EngModel[4];
+
+		private readonly float[] engUnmatched = new float[4];
+
+		// predicted thrust of engine i at throttle input x (the game's Turbojet model, see the engine scan)
+		private float EngThrustAt(int i, float x)
+		{
+			ref EngModel em = ref engModel[i];
+			float tr = (em.remapY > em.remapX + 0.001f) ? Mathf.Clamp01((x - em.remapX) / (em.remapY - em.remapX)) : Mathf.Clamp01(x);
+			float rpm = Mathf.Lerp(em.rMin, em.ceil, tr);
+			float dry = (em.rMax > em.rMin) ? Mathf.Clamp01((rpm - 0.85f * em.rMin) / (em.rMax - em.rMin)) : tr;
+			float th = em.t0 * dry;
+			if (em.ab > 0f && em.rMax > 0f && rpm / em.rMax > 0.85f && x > em.abStart)
+			{
+				th += em.ab * Mathf.Clamp01((x - em.abStart) / Mathf.Max(0.01f, em.abEnd - em.abStart));
+			}
+			return th;
+		}
+
+		// weaker / stronger predicted thrust at throttle input x (1 when both are at idle or there is one engine)
+		private float EngRatioAt(int n, float x)
+		{
+			float lo = float.MaxValue;
+			float hi = 0f;
+			for (int i = 0; i < n; i++)
+			{
+				float th = EngThrustAt(i, x);
+				lo = Mathf.Min(lo, th);
+				hi = Mathf.Max(hi, th);
+			}
+			return (hi > 1000f) ? Mathf.Clamp01(lo / hi) : 1f;
+		}
+
+		// the throttle input where the afterburner starts (1 without one)
+		public float engAbStart = 1f;
+
+		// the afterburner gate is holding the throttle at the afterburner's start
+		public bool abGateOn;
+
+		private bool engFixedPrev;
+
+		// 0.4.1 / 2.4.1 thrust match on prediction: the yaw the thrust split WOULD make without the match (deg/s^2, from the
+		// engines' RPMs and the game's thrust law) against the usable yaw authority at this AoA and speed; the match comes
+		// in above MatchYawOn and lets go under MatchYawOff, so a split the fins cannot hold is never allowed to form
+		public float splitYawPred;
+
+		public float splitUsage;
+
+		internal static float MatchYawOn = 0.8f;
+
+		internal static float MatchYawOff = 0.5f;
+
+		private bool matchYawOn;
+
+		// 0.4.1b / 2.4.1b: the match is proportional. On the way up to the cap it comes in ahead of the AoA (the AoA
+		// predicted MatchLead s ahead from its rate, over the MatchBand deg under the cap), so the healthy engine is already
+		// down to the damaged one's thrust when the cap is reached and the cap lifts without a step; stick released with
+		// the AoA under the cap, it eases back out (unless the fins could not hold the split: splitUsage / the VMC latch).
+		public float matchF;
+
+		public bool matchFull;
+
+		internal static float MatchBand = 4f;
+
+		internal static float MatchLead = 0.3f;
+
+		// the match is complete this long before the AoA would reach the cap at its present rate
+		internal static float MatchLeadTime = 0.8f;
+
+		internal static float MatchRiseRate = 4f;
+
+		internal static float MatchFallRate = 1.5f;
+
+		// the VMC protection with a weak (running) engine: the match, latched until the sideslip is calm, instead of the throttle
+		private bool vmcMatch;
+
+		private float vmcMatchCalmT;
+
+		// after leaving the fixed-cap state the thrust term stays out of the sweep for this long (the first sweep after the
+		// match engages still sees the split settling: 23 Oct 00:00 log, cap 12 for one cycle)
+		private float tKHoldT;
+
+		// IAS at the last asymmetric-load sweep: the stored yaw authority scales with q from there
+		private float asymSweepIas = 1f;
+
+		public float engRatioF = 1f;
+
+		internal static float EngineAsymEnter = 0.85f;
+
+		internal static float EngineAsymExit = 0.92f;
+
 		private int engTotal = -1;
 
 		internal static float DamageLatFloor = 0.35f;
@@ -6234,12 +6778,35 @@ namespace Ifrit_KR67.FCS
 			int engOk = 0;
 			float tMax = 0f;
 			float tMin = float.MaxValue;
+			// 0.4.1: each engine's thrust-vs-throttle from its damage state (Turbojet.FixedUpdate): the RPM it can reach is
+			// minRPM + (maxRPM - minRPM) x (0.5 x condition + 0.5); at a throttle input x the target RPM is
+			// Lerp(minRPM, that ceiling, (x - remap.x) / (remap.y - remap.x)); dry thrust = (RPM - 0.85 minRPM) / (maxRPM - minRPM)
+			// of the maximum; the afterburner runs only above 85 % of maxRPM (condition > 0.55 on a 1000-3000 RPM engine) and
+			// fades in from its start throttle to its end. From that: the weaker / stronger ratio at full throttle
+			// (engAbRatio) and whether one can light its afterburner while another cannot (engAbMismatch).
+			int nE = 0;
+			engAbStart = 1f;
 			foreach (Turbojet eg in tvc.engines)
 			{
 				float tE = 0f;
 				if (eg != null && Acc.TF_operable(eg))
 				{
 					engOk++;
+					if (nE < engModel.Length)
+					{
+						ref EngModel em = ref engModel[nE];
+						em.rMin = Acc.TF_minRPM(eg);
+						em.rMax = Acc.TF_maxRPM(eg);
+						em.ceil = em.rMin + (em.rMax - em.rMin) * (0.5f * Mathf.Clamp01(Acc.TF_condition(eg)) + 0.5f);
+						Vector2 rm = Acc.TF_remap(eg);
+						em.remapX = rm.x;
+						em.remapY = rm.y;
+						em.t0 = Mathf.Max(0f, Acc.TF_staticThrust(eg));
+						em.ab = 0f;
+						em.abStart = 1f;
+						em.abEnd = 1f;
+						nE++;
+					}
 					JetNozzle[] nzE = Acc.TF_nozzles(eg);
 					if (nzE != null)
 					{
@@ -6248,6 +6815,14 @@ namespace Ifrit_KR67.FCS
 							if (jE != null)
 							{
 								tE += Mathf.Max(0f, Acc.JN_totalThrust(jE));
+								if (nE > 0 && nE <= engModel.Length)
+								{
+									ref EngModel em2 = ref engModel[nE - 1];
+									em2.ab += Mathf.Max(0f, Acc.JN_abMax(jE));
+									em2.abStart = Mathf.Min(em2.abStart, Acc.JN_abStart(jE));
+									em2.abEnd = Mathf.Min(em2.abEnd, Acc.JN_abEnd(jE));
+								}
+								engAbStart = Mathf.Min(engAbStart, Acc.JN_abStart(jE));
 							}
 						}
 					}
@@ -6255,7 +6830,89 @@ namespace Ifrit_KR67.FCS
 				tMax = Mathf.Max(tMax, tE);
 				tMin = Mathf.Min(tMin, tE);
 			}
+			engAbRatio = 1f;
+			engAbMismatch = false;
+			if (engTotal > 1 && nE >= 2)
+			{
+				engAbRatio = EngRatioAt(nE, 1f);
+				bool anyAb = false;
+				bool allAb = true;
+				for (int ie = 0; ie < nE; ie++)
+				{
+					ref EngModel emc = ref engModel[ie];
+					bool ok = emc.ab > 0f && emc.rMax > 0f && emc.ceil / emc.rMax > 0.85f;
+					anyAb |= ok;
+					allAb &= ok;
+				}
+				engAbMismatch = anyAb && !allAb;
+			}
+			// the yaw the thrust split would make right now without the match: each engine's dry thrust from its RPM, plus
+			// the afterburner it would have at the pilot's throttle (rawThrottle, before the match holds it under the
+			// afterburner's start), less the weakest one's, on its nozzles' arms.
+			// 0.4.3: the afterburner was left out ("equal on both when both have it, and the throttle is held under it
+			// when only one has") - but the throttle is only held while the match is in. 23 Oct 00:51 log, 62-70 s: vertical
+			// at 35-42 m/s, the match released as the AoA fell under the cap, the healthy engine lit its afterburner and
+			// the split was 7.1 deg/s^2 against 6-7 of yaw authority; the prediction without the 37 kN of afterburner
+			// said 3.8, splitUsage peaked at 0.80 (the match latches above 0.8), and the nose yawed 0.3 -> 9.5 deg/s in 8 s
+			// with the stick centred. With it the prediction is 1.5 and the match holds.
+			splitYawPred = 0f;
+			splitUsage = 0f;
+			if (engTotal > 1 && engOk == engTotal && nE >= 2)
+			{
+				float tgt = float.MaxValue;
+				int k = 0;
+				foreach (Turbojet eg in tvc.engines)
+				{
+					if (eg != null && Acc.TF_operable(eg) && k < nE)
+					{
+						ref EngModel emk = ref engModel[k];
+						float ratio = (emk.rMax > emk.rMin) ? Mathf.Clamp01((Acc.TF_rpm(eg) - 0.85f * emk.rMin) / (emk.rMax - emk.rMin)) : 1f;
+						engUnmatched[k] = emk.t0 * ratio;
+						if (emk.ab > 0f && emk.rMax > 0f && emk.ceil / emk.rMax > 0.85f && rawThrottle > emk.abStart)
+						{
+							engUnmatched[k] += emk.ab * Mathf.Clamp01((rawThrottle - emk.abStart) / Mathf.Max(0.01f, emk.abEnd - emk.abStart));
+						}
+						tgt = Mathf.Min(tgt, engUnmatched[k]);
+						k++;
+					}
+				}
+				Vector3 mW = Vector3.zero;
+				k = 0;
+				foreach (Turbojet eg in tvc.engines)
+				{
+					if (eg != null && Acc.TF_operable(eg) && k < nE)
+					{
+						float extra = engUnmatched[k] - tgt;
+						JetNozzle[] nzS = Acc.TF_nozzles(eg);
+						if (extra > 1f && nzS != null && nzS.Length > 0)
+						{
+							float per = extra / nzS.Length;
+							foreach (JetNozzle jS in nzS)
+							{
+								Transform tS = (jS != null) ? Acc.JN_thrustT(jS) : null;
+								if (tS != null)
+								{
+									mW += Vector3.Cross(tS.position - cg, tS.forward * per);
+								}
+							}
+						}
+						k++;
+					}
+				}
+				Quaternion rInv = Quaternion.Inverse(((Component)(object)ac).transform.rotation);
+				Vector3 mA = rInv * mW;
+				splitYawPred = Mathf.Abs(AccYaw(new Vector3(0f - mA.z, 0f - mA.x, mA.y)));
+				float qScale = Mathf.Clamp((ias * ias) / (asymSweepIas * asymSweepIas), 0.05f, 2f);
+				float cyNow = asymValid ? (asymCyNow * qScale) : 0f;
+				splitUsage = (cyNow > 1f) ? (splitYawPred / Mathf.Max(1f, AsymResMaxFrac * cyNow)) : ((splitYawPred > 1f) ? 9f : 0f);
+			}
 			engOut = engTotal > 1 && engOk > 0 && (engOk < engTotal || (tMax > 20000f && tMin < 0.15f * tMax));
+			float ratioNow = (engTotal > 1 && engOk == engTotal && tMax > 20000f) ? Mathf.Clamp01(tMin / tMax) : 1f;
+			engRatioF += (ratioNow - engRatioF) * Mathf.Clamp01(Time.fixedDeltaTime / 1f);
+			// the asymmetric state is the MEASURED thrust split (filtered 1 s, with hysteresis), and only while the split is
+			// allowed: with the thrust-match limiter holding the throttle (AoA above the damaged-engine cap) the thrust is
+			// symmetric and there is nothing to cap for - the pilot keeps the full AoA until he brings the AoA down himself
+			engAsym = !engOut && engTotal > 1 && engOk == engTotal && tMax > 20000f && !matchFull && (engAsym ? (engRatioF < EngineAsymExit) : (engRatioF < EngineAsymEnter));
 			if (rudTotal <= 0)
 			{
 				yawHealth = 1f;
@@ -6395,6 +7052,12 @@ namespace Ifrit_KR67.FCS
 				vmcLim = 1f;
 				vmcOn = false;
 				vmcBetaPrev = beta;
+				abGateOn = false;
+				matchYawOn = false;
+				vmcMatch = false;
+				matchF = 0f;
+				matchFull = false;
+				ThrustMatchClear();
 				return;
 			}
 			float bDot = (beta - vmcBetaPrev) / Mathf.Max(dt, 0.001f);
@@ -6412,7 +7075,26 @@ namespace Ifrit_KR67.FCS
 			vmcQuietT = latQuiet ? (vmcQuietT + dt) : 0f;
 			bool thrustSide = !asymValid || asymAyNow * beta < 0f;
 			bool growing = Mathf.Abs(beta) > VmcBeta && beta * bDot > 0f;
-			bool runaway = engOut && vmcSatF > 0.5f && thrustSide && (vmcQuietT > VmcQuiet || Mathf.Abs(beta) > 3f * VmcBeta) && (growing || Mathf.Abs(beta) > 2f * VmcBeta);
+			bool runaway = (engOut || engAsym) && vmcSatF > 0.5f && thrustSide && (vmcQuietT > VmcQuiet || Mathf.Abs(beta) > 3f * VmcBeta) && (growing || Mathf.Abs(beta) > 2f * VmcBeta);
+			// with a weak (running) engine the run-away is answered by the thrust match, not by cutting both engines
+			// (23 Oct 00:06 F-22E log: both throttled to T/W 0.13 for 5 s at 40-60 m/s): the match holds until the
+			// sideslip has been calm for 2 s
+			bool weakEng = engAbRatio < EngineAsymEnter && !engOut;
+			if (runaway && weakEng && Plugin.EngineAbAoAGate && EngineOutFixedCap)
+			{
+				vmcMatch = true;
+				vmcMatchCalmT = 0f;
+				runaway = false;
+			}
+			if (vmcMatch)
+			{
+				bool calmM = Mathf.Abs(beta) < 0.5f * VmcBeta && vmcSatF < 0.3f;
+				vmcMatchCalmT = calmM ? (vmcMatchCalmT + dt) : 0f;
+				if (vmcMatchCalmT > 2f || !weakEng)
+				{
+					vmcMatch = false;
+				}
+			}
 			if (runaway)
 			{
 				if (!vmcOn)
@@ -6425,7 +7107,7 @@ namespace Ifrit_KR67.FCS
 			else
 			{
 				bool calm = Mathf.Abs(beta) < 0.5f * VmcBeta && vmcSatF < 0.3f;
-				if (calm || !engOut)
+				if (calm || !(engOut || engAsym))
 				{
 					vmcLim = Mathf.Min(1f, vmcLim + VmcReleaseRate * dt);
 				}
@@ -6437,6 +7119,165 @@ namespace Ifrit_KR67.FCS
 			if (vmcLim < 0.999f)
 			{
 				inp.throttle = Mathf.Min(inp.throttle, vmcLim);
+			}
+			// 0.4.1 thrust match: with one engine down on thrust (predicted full-throttle ratio under EngineAsymEnter) and the
+			// AoA above the damaged-engine cap, the healthy engine is held down to the damaged one's thrust at whatever
+			// throttle the pilot sets: the game derates a damaged engine's whole throttle-to-RPM map (target RPM =
+			// Lerp(minRPM, minRPM + (maxRPM - minRPM) x (0.5 x condition + 0.5), throttle)), so the two only ever match at
+			// idle by throttle alone; the healthy engine's parasiticThrustLoss (thrust = (maxThrust - loss) x RPM ratio,
+			// unused on this jet) is set each tick from the measured RPMs so its dry thrust equals the weak one's. If the weak
+			// engine cannot light its afterburner the throttle input is also held at the afterburner's start. No thrust
+			// split, so no AoA cap for it: the pilot keeps the full AoA, and the thrust comes back once he brings the AoA
+			// down to the cap himself (on above cap + 2, off under cap + 0.5: riding the limiter counts as inside). With
+			// an engine OUT there is nothing to match: above EngineOutAoACap the throttle is held at military power. The
+			// VMC protection (measured sideslip run-away) stays the last resort.
+			bool weak = engAbRatio < EngineAsymEnter;
+			bool gateNeed = Plugin.EngineAbAoAGate && EngineOutFixedCap && (engOut || weak);
+			float tgtF = 0f;
+			if (gateNeed && engOut)
+			{
+				// an engine out: nothing to match; above EngineOutAoACap the throttle is held at the afterburner's start
+				float capO = Plugin.EngineOutAoACap;
+				float aAbsO = Mathf.Abs(alpha);
+				abGateOn = abGateOn ? (aAbsO > capO + 0.5f) : (aAbsO > capO + 2f);
+				matchYawOn = false;
+				vmcMatch = false;
+			}
+			else if (gateNeed)
+			{
+				float capA = Plugin.EngineDamagedAoACap;
+				float aAbs = Mathf.Abs(alpha);
+				float spDir = sp * ((alpha >= 0f) ? 1f : (-1f));
+				// 0.4.2 / 2.4.2: the match is timed, not placed. The AoA limiter starts braking for the cap well before it, and
+				// a match that only completes as the AoA arrives at the cap leaves the pilot feeling the brake until it does
+				// (23 Oct 00:39 log: full match 1.4-1.9 s after it began at 230-360 kt, where the AoA came up at 18 deg/s,
+				// against 0.23 s at 95-170 kt and 35 deg/s). Now: with the stick pulling toward the cap, the match goes to 1
+				// once the AoA is predicted to reach the cap within MatchLeadTime s at its present rate (or is already within
+				// MatchBand of it), so it is complete, at MatchRiseRate, before the limiter would have begun to brake,
+				// whatever the speed; above the cap it is 1 whatever the stick; stick relaxed under the cap it is 0 (thrust
+				// comes back).
+				float aRate = alphaDot * ((alpha >= 0f) ? 1f : (-1f));
+				float tCap = (capA - aAbs) / Mathf.Max(aRate, 0.5f);
+				float ramp = 0f;
+				if (aAbs > capA + 2f)
+				{
+					ramp = 1f;
+				}
+				else if (spDir > 0.15f && (aAbs > capA - MatchBand || (aRate > 0.5f && tCap < MatchLeadTime)))
+				{
+					ramp = 1f;
+				}
+				else if (spDir >= 0.05f && aAbs > capA - MatchBand)
+				{
+					ramp = Mathf.Clamp01((aAbs - (capA - MatchBand)) / MatchBand);
+				}
+				// and on prediction: the split's yaw against what the fins have at this AoA and speed (see the engine scan)
+				matchYawOn = matchYawOn ? (splitUsage > MatchYawOff) : (splitUsage > MatchYawOn);
+				tgtF = Mathf.Max(ramp, (matchYawOn || vmcMatch) ? 1f : 0f);
+				abGateOn = tgtF > 0.001f || matchF > 0.001f;
+			}
+			else
+			{
+				abGateOn = false;
+				matchYawOn = false;
+				vmcMatch = false;
+			}
+			if (abGateOn && engOut)
+			{
+				inp.throttle = Mathf.Min(inp.throttle, engAbStart);
+				matchF = 0f;
+				matchFull = false;
+				ThrustMatchClear();
+			}
+			else if (gateNeed && !engOut)
+			{
+				matchF = Mathf.MoveTowards(matchF, tgtF, ((tgtF > matchF) ? MatchRiseRate : MatchFallRate) * dt);
+				matchFull = matchF >= 0.995f;
+				if (matchF > 0.001f)
+				{
+					if (engAbMismatch)
+					{
+						// the afterburner the weak engine cannot light fades out with the match
+						inp.throttle = Mathf.Min(inp.throttle, Mathf.Lerp(1f, engAbStart, matchF));
+					}
+					ThrustMatchApply(matchF);
+				}
+				else
+				{
+					ThrustMatchClear();
+				}
+			}
+			else
+			{
+				matchF = 0f;
+				matchFull = false;
+				ThrustMatchClear();
+			}
+		}
+
+		// hold every stronger engine's dry thrust down to the weakest one's, from the measured RPMs (see VmcApply)
+		private void ThrustMatchApply(float frac)
+		{
+			float target = float.MaxValue;
+			foreach (Turbojet eg in tvc.engines)
+			{
+				if (eg != null && Acc.TF_operable(eg))
+				{
+					float rMin = Acc.TF_minRPM(eg);
+					float rMax = Acc.TF_maxRPM(eg);
+					float ratio = (rMax > rMin) ? Mathf.Clamp01((Acc.TF_rpm(eg) - 0.85f * rMin) / (rMax - rMin)) : 1f;
+					target = Mathf.Min(target, Mathf.Max(0f, Acc.TF_staticThrust(eg)) * ratio);
+				}
+			}
+			if (target == float.MaxValue)
+			{
+				ThrustMatchClear();
+				return;
+			}
+			float lossMax = 0f;
+			foreach (Turbojet eg in tvc.engines)
+			{
+				if (eg == null)
+				{
+					continue;
+				}
+				float loss = 0f;
+				if (Acc.TF_operable(eg))
+				{
+					float rMin = Acc.TF_minRPM(eg);
+					float rMax = Acc.TF_maxRPM(eg);
+					float ratio = (rMax > rMin) ? Mathf.Clamp01((Acc.TF_rpm(eg) - 0.85f * rMin) / (rMax - rMin)) : 1f;
+					float t0 = Mathf.Max(0f, Acc.TF_staticThrust(eg));
+					if (ratio > 0.001f)
+					{
+						loss = Mathf.Clamp(t0 - target / ratio, 0f, t0) * Mathf.Clamp01(frac);
+					}
+				}
+				Acc.TF_parasitic(eg) = loss;
+				lossMax = Mathf.Max(lossMax, loss);
+			}
+			engMatchLoss = lossMax;
+			matchApplied = true;
+		}
+
+		public void ThrustMatchClear()
+		{
+			if (!matchApplied)
+			{
+				return;
+			}
+			matchApplied = false;
+			engMatchLoss = 0f;
+			if (tvc == null)
+			{
+				return;
+			}
+			foreach (Turbojet eg in tvc.engines)
+			{
+				if (eg != null)
+				{
+					Acc.TF_parasitic(eg) = 0f;
+				}
 			}
 		}
 
@@ -6517,6 +7358,19 @@ namespace Ifrit_KR67.FCS
 			fuelTrimDelta = best;
 			fuelTrimLat = latNow + best;
 			fuelTrimOn = true;
+		}
+
+		public float revSenseDbg = 1f;
+
+		// Ifrit 0.3.4: roll stick sense vs AoA for the velocity-vector roll: +1 up to RevFlowSenseStart (|AoA|), -1 from
+		// RevFlowSenseEnd, smoothstep between
+		private static float RevFlowSense(float a)
+		{
+			float a0 = Plugin.RevFlowSenseStart;
+			float a1 = Mathf.Max(a0 + 1f, Plugin.RevFlowSenseEnd);
+			float x = Mathf.Clamp01((Mathf.Abs(a) - a0) / (a1 - a0));
+			x = x * x * (3f - 2f * x);
+			return 1f - 2f * x;
 		}
 
 		private void LateralLaw(float dt)
@@ -6652,7 +7506,17 @@ namespace Ifrit_KR67.FCS
 			}
 			float num9 = Mathf.Clamp01((Mathf.Abs(alpha) - Plugin.CoupleAoA) / 14f);
 			float num10 = Mathf.Min(num3 / Mathf.Max(Mathf.Abs(num), 0.05f), num8 / Mathf.Max(Mathf.Abs(num2), 0.05f));
-			float num11 = Mathf.Clamp(((revFlow && Plugin.RevFlowRollSense) ? (-1f) : 1f) * (sr + num9 * sy), -1f, 1f) * num10;
+			// Ifrit 0.3.4: the reversed-flow roll sense blends smoothly with the AoA (RevFlowSenseStart -> End: +1 -> -1 through
+			// 0) instead of flipping at 100 deg (released at 80). Past 90 deg the velocity-vector roll is mostly body yaw
+			// (sin AoA) and only a little body roll (cos AoA), so the flip there reversed the whole rotation: 20 Oct 23:01 log,
+			// MPO, full right stick held from -115 to -60 deg AoA, yawing right at 10-20 deg/s; at -80 deg the target went
+			// -23 -> +29 deg/s (353.7 s, 394.4 s, the same at -79 deg) and the jet had to reverse its yaw. Now the rotation
+			// stays the same through +-90 deg and the sense turns over near 180 deg, where the velocity-vector roll is nearly
+			// all body roll and the flip keeps the stick rolling the jet the same way from the seat. In the blend band the
+			// stick's roll command passes through zero rather than jumping.
+			float revS = Plugin.RevFlowRollSense ? RevFlowSense(alpha) : 1f;
+			revSenseDbg = revS;
+			float num11 = Mathf.Clamp(revS * (sr + num9 * sy), -1f, 1f) * num10;
 			coupRollLim = 0f;
 			if (Plugin.CouplingRollLimit > 0f && Ia[1, 1] > 1f && asymValid && tvc.M != null && tvc.N > 1)
 			{
@@ -6758,6 +7622,18 @@ namespace Ifrit_KR67.FCS
 			float bErrNow = beta - num12;
 			float bErrLead = bErrNow + bdk * SlipLeadT;
 			float num14 = Mathf.Clamp01((Mathf.Abs(alpha) - 8f) / 10f);
+			// Ifrit 0.3.8: one low-TAS / reversed-flow factor for everything that works off the sideslip or coordinates the
+			// roll with yaw (0.3.7's hold fade, moved up): 1 at speed, 0 below SlipHoldMinTAS or past 120 deg |AoA|.
+			float latRevK = 1f - Mathf.Clamp01((Mathf.Abs(alpha) - 100f) / 20f);
+			latRevK = latRevK * latRevK * (3f - 2f * latRevK);
+			float latHoldK = Mathf.Clamp01((tas - Plugin.SlipHoldTasMin) / Mathf.Max(1f, Plugin.SlipHoldTasSpan)) * latRevK;
+			// Ifrit 0.3.9: the roll limiters (sideslip guard / governor, yaw anchor, roll-acceleration coordination cap) use
+			// their own, wider band (Plugin.SlipLimTasMin -> +SlipLimTasSpan, smoothstep): 20 Oct 23:59 log, 0.3.8, full
+			// stick at 13-48 m/s: roll built to 29 deg/s, then as TAS passed 18-35 m/s the guard came back with 15-16 deg of
+			// sideslip the 5-10 deg/s^2 yaw axis could not take out yet (target 33 -> 15) and the yaw anchor held the roll
+			// on its 10 deg/s floor from 30 m/s: ~11 deg/s for 3+ s with full stick up to 48 m/s.
+			float latLimK = Mathf.Clamp01((tas - Plugin.SlipLimTasMin) / Mathf.Max(1f, Plugin.SlipLimTasSpan));
+			latLimK = latLimK * latLimK * (3f - 2f * latLimK) * latRevK;
 			float x = Mathf.Clamp01(1f - (num13 - Plugin.SideslipGuardStart) / 10f) * (1f - Plugin.YawSatGuard * yawSat * num14);
 			// independent of SideslipGuardStart (which a pilot may raise out of the way for deliberate sideslip): backs the
 			// velocity-vector roll off only while the predicted sideslip error is large AND still growing, so a sideslip that is
@@ -6804,6 +7680,10 @@ namespace Ifrit_KR67.FCS
 				x = Mathf.Min(x, sg);
 			}
 			// the fast cut only when the sideslip lead is what cuts (the 2.0.15 guard terms keep their 0.25 s)
+			// Ifrit 0.3.8: the sideslip guard / governor fade out with latHoldK. 20 Oct 23:42 log, MPO off, 5-18 deg AoA, 11-16
+			// m/s, full right stick (338.6-339.5 s): the sideslip nothing could coordinate there built to -17 deg and the guard
+			// cut the roll target 19 -> 13 -> 5 -> 2 deg/s (guard 0.7 -> 0.0): roll stick dead.
+			x = Mathf.Lerp(1f, x, latLimK);
 			x = guardF.Step(x, (guardF.init && x < guardF.y && slipGovDbg < 0.999f) ? GuardCutTau : 0.25f, dt);
 			num11 *= x;
 			// 2.1.0 yaw-anchored roll: the velocity-vector roll needs a body yaw rate of pS sin(AoA). It may only ask for a yaw
@@ -6835,7 +7715,7 @@ namespace Ifrit_KR67.FCS
 				lo = Mathf.Min(lo, 0f - YawAnchorFloor);
 				hi = Mathf.Max(hi, YawAnchorFloor);
 				yawAnchorDbg = (num11 >= 0f) ? hi : lo;
-				num11 = Mathf.Lerp(num11, Mathf.Clamp(num11, lo, hi), negGate);
+				num11 = Mathf.Lerp(num11, Mathf.Clamp(num11, lo, hi), negGate * latLimK);
 			}
 			guardDbg = x;
 			pSTgtDbg = num11;
@@ -6843,7 +7723,9 @@ namespace Ifrit_KR67.FCS
 			float max = Mathf.Lerp(Plugin.RollAccelUseLowIas, Plugin.RollAccelUse, Mathf.InverseLerp(60f, 110f, ias));
 			float a = Mathf.Clamp(0.85f - num15 / Mathf.Max(30f, pFull * (aRollGo / aRoll)), 0.1f, max) * aRollGo / Mathf.Max(Mathf.Abs(num), 0.05f);
 			float num16 = 0.6f * aYaw / Mathf.Max(Mathf.Abs(num2), 0.05f);
-			float num17 = (latAccDbg = Mathf.Min(a, RollEntryCoord * num16));
+			// Ifrit 0.3.8: the yaw-coordination cap on the roll acceleration fades with latHoldK too (11 m/s, 10 deg AoA: ~8
+			// deg/s^2 from a 5 deg/s^2 yaw axis held the roll entry to a crawl where no coordination is possible anyway)
+			float num17 = (latAccDbg = Mathf.Min(a, Mathf.Lerp(a, RollEntryCoord * num16, latLimK)));
 			// 1.8.41: the roll entry's acceleration yields with the governor too (the entry is where the surfaces deflect most)
 			num17 *= Mathf.Lerp(RollGovAccelFloor, 1f, rollGov);
 			if (pTraj.x * (num11 - pTraj.x) < 0f)
@@ -6950,7 +7832,12 @@ namespace Ifrit_KR67.FCS
 				float pSc = cSgn * cRaw * num10;
 				pTraj.Step(pSc, num17, Mathf.Max(a2, jFloor), Mathf.Max(a2 * Mathf.Min(endJ, 1f), jFloor), dt);
 				float gTermM = (tas > 40f) ? (9.81f * Mathf.Sin(phi * (MathF.PI / 180f)) * Mathf.Cos(theta * (MathF.PI / 180f)) / tas * 57.29578f * Mathf.Clamp01((tas - 40f) / 20f)) : 0f;
-				float rSc = mpoCoord * rSF.Step(Mathf.Clamp(Plugin.KBeta * beta, 0f - num8, num8) + gTermM, 0.12f, dt);
+				// Ifrit 0.3.7: the coordinated part's sideslip hold fades out at very low TAS / in reversed flow as in the coupled law
+				float holdM = Mathf.Clamp01((tas - Plugin.SlipHoldTasMin) / Mathf.Max(1f, Plugin.SlipHoldTasSpan));
+				float revM = 1f - Mathf.Clamp01((Mathf.Abs(alpha) - 100f) / 20f);
+				holdM *= revM * revM * (3f - 2f * revM);
+				slipHoldDbg = holdM;
+				float rSc = mpoCoord * rSF.Step(Mathf.Clamp(Plugin.KBeta * holdM * beta, 0f - num8, num8) + gTermM, 0.12f, dt);
 				rSDbg = rSc;
 				// body roll left over
 				float pBodyT = (sr - cSgn * cRaw) * num3;
@@ -6992,6 +7879,7 @@ namespace Ifrit_KR67.FCS
 				}
 				pCmdPrev = pCmd;
 				rCmdPrev = rCmd;
+				SlipHistClear();
 				return;
 			}
 			if (mpoSepPrev)
@@ -7030,7 +7918,43 @@ namespace Ifrit_KR67.FCS
 				pSlipMax = Mathf.Max(num3, Mathf.Min(Plugin.MaxRollRate, Plugin.RollStopFactor * (aStopSide + aRollTvc)));
 				slipLim = Mathf.Max(num8, Mathf.Min(num8 / Mathf.Max(num, 0.25f), pSlipMax / Mathf.Max(Mathf.Abs(num2), 0.25f)));
 			}
-			float num23 = (rSDbg = rSF.Step(Mathf.Clamp(num22 * (beta - num12), 0f - slipLim, slipLim) + num21, 0.12f, dt));
+			// Ifrit 0.3.5: sideslip predictor (dev SlipPredictTime, s; SlipPredictWashout, s). The sideslip correction acts
+			// through the inner roll/yaw rate loops, which in game follow pCmd/rCmd ~0.3 s late (20 Oct logs: pCmd -> p
+			// 0.19-0.32 s, rCmd -> r 0.29-0.37 s, gain ~1; the bench's are ~0.1 s, which is why the bench never showed it).
+			// beta-dot = -rS, so the loop is gain / s with that delay: at the high-AoA gain of 4 it rings at omega ~ gain
+			// (0.72 Hz) and with 0.33 s of delay it sits on the stability edge. 20 Oct 23:10 log (0.3.3), full thrust, roll
+			// stick and pedals centred, 45-55 deg AoA, 54-75 m/s: sideslip peaks 2.9 -> 3.7 -> 4.4 deg every 1.4 s
+			// (growing), decelerons +-30 deg; also 157-161 s (+-2.4 deg) and the 22:37 log at idle. The 0.3.3 sideslip-rate
+			// lead could not cover 0.3 s (delay-loop model, gain 4, delay 0.3: decay per cycle 0.89 -> 0.78 with the lead;
+			// it matched the logged 1.4 s period and growth) and is removed. The predictor is a Smith predictor: the rS this
+			// law has already commanded over the last SlipPredictTime has not shown up in the sideslip yet, so the correction
+			// works on beta - integral(commanded rS) over that window, the sideslip those commands will leave. The commanded
+			// rS is the one actually sent (after the limit scaling), less the gravity term (which only cancels gravity's own
+			// sideslip rate); it is washed out over SlipPredictWashout so a held correction (a yaw trim against a load) leaves
+			// no extra steady sideslip. Model, gain 4, predictor at 0.3 s: decay per cycle <= 0.23 for a true delay of
+			// 0.2-0.45 s and inner-loop gain 0.8-1.2 (no predictor: 0.21-2.99), settles in 0.8-5 s. Gear-down rate law and
+			// the MPO separate-axes law unaffected; faded in from 20 to 40 m/s TAS. 0 = no predictor (0.3.2).
+			float predT = (Mode == FcsMode.GearDownRate) ? 0f : Plugin.SlipPredictTime;
+			// Ifrit 0.4.0: the roll-stick gate is a dev key (SlipPredictRollGate, default 0 = none). With the gate the predictor
+			// was off in every held corkscrew, and that is exactly where the 22 Oct 00:30 log rang (+-12 deg, +-50 deg/s).
+			float rollGate = Plugin.SlipPredictRollGate;
+			float predGate = Mathf.Clamp01((tas - 20f) / 20f) * ((rollGate > 0f) ? (1f - Mathf.Clamp01(Mathf.Abs(sr) / rollGate)) : 1f);
+			// faded in by the loop's gain x delay (its phase cost, rad at crossover): off up to 0.4 (KBeta 1.3), full from 1.0
+			// (gain 3.3+). Below that the loop has its margin and the predictor only slowed the recovery (bench, rolling pull
+			// at 600 km/h, 13 deg AoA, gain 2.4: -4.5 deg back to 0 in 2 s instead of 1 s).
+			float predW = (predT > 0f) ? Mathf.Clamp01((num22 * predT - 0.4f) / 0.6f) : 0f;
+			float slipPred = (predW > 0f) ? (predW * SlipHistSum(predT)) : 0f;
+			slipPredDbg = slipPred;
+			// Ifrit 0.3.7: the sideslip hold fades out at very low TAS (Plugin.SlipHoldTasMin -> +SlipHoldTasSpan) and in true
+			// reversed flow (|AoA| 100 -> 120 deg); the pedal sideslip command stays, as a plain yaw-rate command. 20 Oct 23:42
+			// log, MPO: tail slide at -172 deg AoA, 20-33 m/s, sticks centred: the hold (high-AoA gain 4, it ramps on |AoA|)
+			// asked 25-36 deg/s of yaw against a 7 deg/s limit (yaw authority ~5 deg/s^2) and bang-banged on the unstable
+			// backwards weathervane, sideslip +6.6 -> -9.8 -> +10 deg on a ~5 s cycle. 391-400 s, 8-17 m/s, full lateral stick:
+			// sideslip 52 deg, the hold saturated at 27.9 deg/s, and the joint roll/yaw limit scaling (num26) took the roll
+			// command from -5 to ~0 deg/s: roll stick dead. At those speeds the sideslip is not a usable signal.
+			float holdK = latHoldK;
+			slipHoldDbg = holdK;
+			float num23 = (rSDbg = rSF.Step(Mathf.Clamp(num22 * (holdK * (beta - slipPred) - num12), 0f - slipLim, slipLim) + num21, 0.12f, dt));
 			float num24 = pS * num - num23 * num2;
 			float num25 = pS * num2 + num23 * num;
 			float pLimSc = Mathf.Max(num3, Mathf.Min(pSlipMax, Mathf.Abs(num23 * num2)));
@@ -7038,6 +7962,7 @@ namespace Ifrit_KR67.FCS
 			pCmd = num24 / num26;
 			rCmd = num25 / num26;
 			pDotFF = pTraj.v * num / num26;
+			SlipHistPush((num23 / num26 - num21) * predGate, dt);
 			float num27 = aRoll / Mathf.Max(30f, pFull);
 			pCmd += Plugin.RollLead * Mathf.Max(0f, num27 - 2.5f) * pDotFF;
 			float t2 = Mathf.Max(Mathf.InverseLerp(200f, 300f, ias), Mathf.InverseLerp(YawFFAoA0, YawFFAoA1, Mathf.Abs(alpha)));
@@ -7052,7 +7977,7 @@ namespace Ifrit_KR67.FCS
 
 		public void WriteHeader(TextWriter w)
 		{
-			w.Write("t,mode,ias,tas,rho,alpha,beta,nz,nAlpha,tw,p,q,r,sp,sr,sy,qB,qRaw,qCmd,qT,pCmd,rCmd,aUp,aDn,betaG,alphaCmd,nCmd,unload,prot,omegaV,phi,theta,tvcCmd,tvcNow,nMaxAero,alphaAtNMax,gAvail,gInt,aInt,flapBias,flapTarget,hlPos,relief,rudderAuth,yawSat,aRoll,aYaw,pMax,pStockRef,pFull,rMax,guard,pSmax,pSTarget,latAcc,rS,stabPitchFrac,gndBrake,revFlow,asymDy,asymAr,asymAy,asymU,asymCap,asymCapEff,asymCapNeg,dMeasR,dMeasY,asymCr,asymCy,asymFFr,asymFFy,asymMr,asymMy,asymFFGate,rollPitchFF,gUnder,pitchPrio,stabRateBound,momentLead,rollTrim,aRollPos,aRollNeg,latReserve,aUpPitch,aDnPitch,aBrakeTgt,stabBranch,tvcAnchor,tvcBudget,rudSide,gsRCmd,gsNws,gsRud,gsHold,gsLineY,asymCapPitch,pitchNeed,coupRollLim,rpGate,rpBand,rollGov,rollGovMargin,iasDot,qPredK,asymCapRaw,asymCapFilt,alphaCmdRaw,nCmdRaw,rateBlendAoA,hiRate,rateW,zoneX,authCap,authCapEff,nLiftMax,hybridDMacc,floatOn,floatS,rateBlendAoANeg,nLiftMin,hiSide,authCapNeg,vmcLim,engOut,fuelTrimCm,yawHealth,capIUp,capIDn,capPushU,slipRate,slipGov,yawAnchor,gRateLaw,rateCmdG,negGate,sharedLat,rollGovPred,loadRev,stickLead,capOn,capQ,sweepLim,slatRelief,hlPosNow,slipAlloc,coupGate,pitchLead,slipGovPull,decel,pullTrade,abShare,abTgt,abOpen,fightK,pullFFBoost,tvcdCmd,tvcdNow,splitL,splitR,aRollTvc,pSlipMax,slipGain,droopIn,droopOut");
+			w.Write("t,mode,ias,tas,rho,alpha,beta,nz,nAlpha,tw,p,q,r,sp,sr,sy,qB,qRaw,qCmd,qT,pCmd,rCmd,aUp,aDn,betaG,alphaCmd,nCmd,unload,prot,omegaV,phi,theta,tvcCmd,tvcNow,nMaxAero,alphaAtNMax,gAvail,gInt,aInt,flapBias,flapTarget,hlPos,relief,rudderAuth,yawSat,aRoll,aYaw,pMax,pStockRef,pFull,rMax,guard,pSmax,pSTarget,latAcc,rS,stabPitchFrac,gndBrake,revFlow,asymDy,asymAr,asymAy,asymU,asymCap,asymCapEff,asymCapNeg,dMeasR,dMeasY,asymCr,asymCy,asymFFr,asymFFy,asymMr,asymMy,asymFFGate,rollPitchFF,gUnder,pitchPrio,stabRateBound,momentLead,rollTrim,aRollPos,aRollNeg,latReserve,aUpPitch,aDnPitch,aBrakeTgt,stabBranch,tvcAnchor,tvcBudget,rudSide,gsRCmd,gsNws,gsRud,gsHold,gsLineY,asymCapPitch,pitchNeed,coupRollLim,rpGate,rpBand,rollGov,rollGovMargin,iasDot,qPredK,asymCapRaw,asymCapFilt,alphaCmdRaw,nCmdRaw,rateBlendAoA,hiRate,rateW,zoneX,authCap,authCapEff,nLiftMax,hybridDMacc,floatOn,floatS,rateBlendAoANeg,nLiftMin,hiSide,authCapNeg,vmcLim,engOut,fuelTrimCm,yawHealth,capIUp,capIDn,capPushU,slipRate,slipGov,yawAnchor,gRateLaw,rateCmdG,negGate,sharedLat,rollGovPred,loadRev,stickLead,capOn,capQ,sweepLim,slatRelief,hlPosNow,slipAlloc,coupGate,pitchLead,slipGovPull,decel,pullTrade,abShare,abTgt,abOpen,fightK,pullFFBoost,tvcdCmd,tvcdNow,splitL,splitR,aRollTvc,pSlipMax,slipGain,droopIn,droopOut,revSense,slipPred,slipHold,splitTier,tvcHold,qTrajV,fightGate,abGate,engAbRatio,engMatchLoss,splitUsage,settledWin,asymThrY,asymLoadY,massKg,nx,capStart,capFlat,capUMin,capULim");
 			foreach (SurfaceEffector surface in surfaces)
 			{
 				w.Write("," + surface.name + "_cmd," + surface.name + "_now," + surface.name + "_aoaNow," + surface.name + "_aoaCmd");
@@ -7079,7 +8004,7 @@ namespace Ifrit_KR67.FCS
 			w.Write(string.Format(invariantCulture, ",{0:F1},{1:F2},{2:F1},{3},{4:F2},{5:F2},{6:F1},{7:F1},{8:F2},{9:F1}", alphaCmdRaw, nCmdRaw, rateBlendAoA, hiRate ? 1 : 0, rateW, zoneX, Mathf.Min(authCap, 99f), Mathf.Min(authCapEff, 99f), nLiftMax, hybridDM * IaInv[1, 1] * 57.29578f));
 			w.Write(string.Format(invariantCulture, ",{0},{1:F2}", floatOn ? 1 : 0, floatS));
 			w.Write(string.Format(invariantCulture, ",{0:F1},{1:F2},{2},{3:F1}", rateBlendAoANeg, nLiftMin, hiRate ? hiSide : 0, Mathf.Max(authCapNegEff, -99f)));
-			w.Write(string.Format(invariantCulture, ",{0:F2},{1},{2:F1},{3:F2}", vmcLim, engOut ? 1 : 0, fuelTrimOn ? (fuelTrimDelta * 100f) : 0f, yawHealth));
+			w.Write(string.Format(invariantCulture, ",{0:F2},{1},{2:F1},{3:F2}", vmcLim, engOut ? 1 : (engAsym ? 2 : 0), fuelTrimOn ? (fuelTrimDelta * 100f) : 0f, yawHealth));
 			w.Write(string.Format(invariantCulture, ",{0:F2},{1:F2},{2:F2}", capIUp, capIDn, capPushU));
 			w.Write(string.Format(invariantCulture, ",{0:F1},{1:F2},{2:F1},{3},{4:F1}", slipRateDbg, slipGovDbg, Mathf.Clamp(yawAnchorDbg, -999f, 999f), Plugin.GRateLaw ? 1 : 0, rateCmdG));
 			w.Write(string.Format(invariantCulture, ",{0:F2},{1:F2},{2:F2},{3:F2},{4:F2},{5},{6:F1},{7:F1},{8:F2},{9:F2},{10:F2},{11:F2}", negGateDbg, sharedLatDbg, rollGovPredDbg, loadRevDbg, stickLeadDbg, capOn ? 1 : 0, capQ, sweepLimDbg, slatRelief, flaps != null ? flaps.hlPos : 0f, (YawPrioHi > 0f && Plugin.SlipYawWeightOn) ? YawHiSlipGate() * Mathf.Clamp01((Mathf.Abs(alpha) - 20f) / 20f) : 0f, coupGateHeld));
@@ -7100,6 +8025,10 @@ namespace Ifrit_KR67.FCS
 				}
 			}
 			w.Write(string.Format(invariantCulture, ",{0:F2},{1:F2},{2:F1},{3:F1},{4:F0},{5:F0},{6:F2},{7:F1},{8:F1}", (tvcd != null) ? tvcd.cmdOut : 0f, (tvcd != null) ? tvcd.now : 0f, spLog, spRog, aRollTvc, pSlipMax, slipGainDbg, (flaps != null) ? flaps.innerDroop : 0f, (flaps != null) ? flaps.outerDroop : 0f));
+			w.Write(string.Format(invariantCulture, ",{0:F2},{1:F2},{2:F2},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F2},{9:F2},{10:F2},{11}", revSenseDbg, slipPredDbg, slipHoldDbg, splitTierDbg, tvcNeutralDbg, qTraj.v, fightGateDbg, abGateOn ? ((engOut || matchF <= 0f) ? 1f : matchF) : 0f, engAbRatio, engMatchLoss * 0.001f, splitUsage, settledWinDbg ? 1 : 0));
+			float thrY = (tvc != null && tvc.active) ? AccYaw((tvcd != null && tvcd.active) ? tvc.MAt(tvc.now) : tvc.Mnow) : 0f;
+			w.Write(string.Format(invariantCulture, ",{0:F2},{1:F2},{2:F1},{3:F3}", thrY, dMeasY + thrY, mass, nxDbg));
+			w.Write(string.Format(invariantCulture, ",{0:F1},{1:F1},{2:F2},{3:F2}", AsymCap.DbgStart, AsymCap.DbgFlat, AsymCap.DbgUMin, AsymCap.DbgULim));
 			foreach (SurfaceEffector surface in surfaces)
 			{
 				w.Write(string.Format(invariantCulture, ",{0:F2},{1:F2},{2:F1},{3:F1}", surface.cmd, surface.now, surface.localAoANow, surface.localAoACmd));
