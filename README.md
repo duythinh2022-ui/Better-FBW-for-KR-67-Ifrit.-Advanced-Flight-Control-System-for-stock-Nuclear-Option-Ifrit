@@ -14,6 +14,6 @@ The port was relatively easy, since the architecture is using INDI (Incremental 
 
 That gave me an idea that I'll might do in the future. Making a tool that generates FCS to any fixed wings aircraft or at least most of them, by automatically using the lift curve and airfoil data from the airframe. Then running a series of offline static 6-Dof to get the force moment of the effectors and give the FCS a rough estimate for envelope limit especially AoA limit. Of course the generated FCS would be a base line, it will need fixes hand tuning.
 
-  
+## License
 
-
+[PolyForm Noncommercial 1.0.0](LICENSE)
